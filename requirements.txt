@@ -1,0 +1,180 @@
+# Banco de validación GPU — app local
+
+Aplicación web pequeña que corre **en el propio servidor Ubuntu** (la torre
+con las tarjetas). Desde el navegador eliges qué tarjetas y qué pruebas
+lanzar, pulsas "Iniciar batería" y la app hace el resto: ejecuta las
+herramientas, mide temperatura en segundo plano, calcula un veredicto
+(OK / REVISAR / DEVOLVER) por tarjeta y genera un informe comparativo
+exportable en CSV o HTML, con un resumen en lenguaje sencillo por tarjeta
+(no hace falta saber de GPUs para leerlo).
+
+## Si el PC tiene pantalla y teclado propios (sin usar la terminal)
+
+1. Descarga el proyecto (como zip desde GitHub, o el zip que te hayan
+   pasado) y descomprímelo con el gestor de archivos (clic derecho →
+   "Extraer aquí").
+2. **Solo la primera vez**, hay que instalar las herramientas del sistema
+   (driver de NVIDIA, DCGM, gpu-burn, etc.) y crear el entorno de Python.
+   Esto sí requiere abrir una terminal una vez — no hay forma de instalar
+   drivers de sistema solo con clics. Sigue la sección "1. Instalar las
+   herramientas" y luego "2. Instalar y arrancar la app" de más abajo.
+3. **A partir de ahí, ya no hace falta terminal nunca más**: haz doble
+   clic en `start_app.sh` dentro de la carpeta del proyecto y elige
+   "Ejecutar" / "Run" cuando el gestor de archivos pregunte (si no
+   pregunta nada, actívalo una vez en Archivos → Preferencias →
+   Comportamiento → "Ejecutar archivos de texto al abrirlos"). Arranca la
+   app y abre el navegador solo en `http://localhost:8080`.
+   También puedes hacer doble clic en `Banco_de_validacion_GPU.desktop`
+   si tu escritorio lo admite como lanzador.
+
+No sustituye al criterio humano en los casos límite: cuando algo no se
+puede interpretar automáticamente (por ejemplo la puntuación exacta del
+benchmark), la app lo deja en blanco y editable en la propia tabla en
+lugar de inventar un número.
+
+## Antes de meter la tarjeta en la torre: comprueba los conectores de alimentación
+
+Con torre apagada y desenchufada, mira cuántos conectores PCIe de 8 pines
+necesita la tarjeta (suele haber 1 o 2, a veces impresos en la propia
+tarjeta junto al conector) y cuántos cables PCIe de sobra tiene tu
+fuente de alimentación (algunas fuentes traen más de un cable PCIe de
+fábrica, o son modulares y tienen un puerto libre para añadir uno). Si
+la tarjeta pide 2 conectores y solo tienes 1 cable disponible, **no
+uses un adaptador Molex-a-PCIe ni un "duplicador" genérico** para
+inventarte el segundo conector — no están pensados para dar esa
+corriente y es una causa conocida de cables derretidos. Sin el segundo
+conector la tarjeta ni siquiera arranca (pantalla en "no signal" y no
+aparece en `nvidia-smi`); en ese caso toca conseguir el cable adecuado
+de la propia fuente, o probarla en otro equipo que sí tenga suficientes
+conectores libres, antes de darla por defectuosa.
+
+## Por qué se instala en el servidor y no en otro sitio
+
+Las pruebas necesitan acceso directo al hardware (`nvidia-smi`, `dcgmi`,
+sensores de temperatura, la propia GPU bajo carga). Eso solo es posible
+ejecutando la app en la misma máquina que tiene las tarjetas — no puede
+correr en la nube ni controlarse en remoto sin acceso a esa máquina.
+
+## 1. Instalar las herramientas de la batería (una sola vez)
+
+Es la misma preparación que la guía "Banco de validación de tarjetas
+GPU": driver NVIDIA, DCGM, gpu-burn, memtest_vulkan y Phoronix Test
+Suite. Resumen rápido:
+
+```bash
+# Driver + utilidades base
+sudo ubuntu-drivers install && sudo reboot
+nvidia-smi -L
+sudo apt update && sudo apt install -y nvidia-cuda-toolkit lm-sensors
+
+# DCGM (ajustar la URL del keyring a la versión de Ubuntu del servidor)
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+# Importante: como comandos SEPARADOS, no encadenados con &&. "apt-get
+# update" a veces devuelve un código de error por un hook de post-invoke
+# que no tiene nada que ver (aviso de "command-not-found"), y si va
+# encadenado con && eso corta la instalación aunque el repo esté bien.
+sudo apt-get update -y
+sudo apt-get install -y datacenter-gpu-manager
+sudo systemctl enable nvidia-dcgm --now
+
+# gpu-burn
+git clone https://github.com/wilicc/gpu-burn.git
+cd gpu-burn && make && cd ..
+
+# memtest_vulkan — el nombre exacto del archivo cambia con cada versión,
+# así que mejor comprobarlo en vivo en vez de adivinarlo:
+curl -s https://api.github.com/repos/GpuZelenograd/memtest_vulkan/releases/latest \
+  | grep browser_download_url
+# copia la URL que te salga (será algo como
+# memtest_vulkan-vX.Y.Z_DesktopLinux_X86_64.tar.xz) y descárgala:
+wget -O memtest_vulkan.tar.xz "<URL_QUE_TE_HAYA_SALIDO>"
+mkdir memtest_vulkan && tar -xJf memtest_vulkan.tar.xz -C memtest_vulkan
+
+# Phoronix Test Suite — el paquete no siempre está en los repos de Ubuntu,
+# si "apt install phoronix-test-suite" falla, instálalo desde el propio proyecto:
+sudo apt install -y php-cli php-xml
+git clone https://github.com/phoronix-test-suite/phoronix-test-suite.git
+cd phoronix-test-suite && sudo ./install-sh && cd ..
+phoronix-test-suite batch-setup     # una vez: contesta que no a subir resultados si no quieres compartirlos
+phoronix-test-suite list-tests | grep -i unigine   # confirma el nombre exacto del test instalado
+```
+
+Si alguna herramienta no está instalada, la app sigue funcionando: esa
+casilla aparecerá en rojo arriba y el paso correspondiente simplemente
+se salta (no rompe la batería del resto).
+
+`setup.sh` en esta misma carpeta automatiza casi todo esto (puedes
+ejecutarlo directamente: `bash setup.sh`); solo el reinicio tras instalar
+el driver y estos dos puntos de arriba (DCGM y memtest_vulkan si su URL
+cambia) puede necesitar tu intervención si algo no cuadra exactamente
+con tu versión de Ubuntu.
+
+## 2. Instalar y arrancar la app
+
+```bash
+cd gpu_test_app
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python3 app.py
+```
+
+Abre `http://localhost:8080` en un navegador del propio servidor, o
+`http://<ip-del-servidor>:8080` desde otro equipo de la misma red.
+
+Por defecto los binarios se buscan en:
+
+| Herramienta      | Ruta por defecto              | Variable de entorno   |
+|-------------------|--------------------------------|------------------------|
+| nvidia-smi        | `nvidia-smi` (PATH)            | `NVIDIA_SMI_BIN`       |
+| dcgmi              | `dcgmi` (PATH)                 | `DCGMI_BIN`            |
+| gpu-burn           | `./gpu-burn/gpu_burn`          | `GPU_BURN_BIN`         |
+| memtest_vulkan     | `./memtest_vulkan/memtest_vulkan` | `MEMTEST_VULKAN_BIN` |
+| Phoronix Test Suite| `phoronix-test-suite` (PATH)   | `PHORONIX_BIN`         |
+
+Si las instalaste en otro sitio, exporta la variable correspondiente
+antes de arrancar, por ejemplo:
+
+```bash
+GPU_BURN_BIN=/opt/gpu-burn/gpu_burn python3 app.py
+```
+
+## 3. Usarla
+
+1. La app detecta las tarjetas NVIDIA presentes (`nvidia-smi -L`) y las
+   lista con casilla marcada por defecto — si estás probando una tarjeta
+   física de cada vez, basta con dejar montada solo esa.
+2. En "Batería de pruebas" elige niveles y duraciones, o pulsa
+   **Usar batería recomendada** (DCGM nivel 3, gpu-burn 5 min, memtest_vulkan
+   2 min, benchmark activado).
+3. **Iniciar batería.** El panel de estado muestra el paso actual y el
+   registro en vivo; se puede **Detener** en cualquier momento.
+4. Cada tarjeta terminada aparece en la tabla de la derecha con su
+   veredicto. La puntuación del benchmark y las notas son editables a
+   mano si hace falta corregirlas; el veredicto también se puede fijar
+   manualmente con el desplegable de esa columna.
+5. **Ver informe** / **Exportar CSV** para guardar o imprimir el
+   comparativo completo — es lo que se adjunta a una reclamación de
+   garantía junto con las carpetas de `informes/<número_de_serie>/`.
+
+## Notas y límites conocidos
+
+- **memtest_vulkan** selecciona la tarjeta de forma automática si no
+  hay entrada por teclado en 10 s. Con varias tarjetas activas a la vez
+  esa selección puede no ser la que esperas — para un lote grande,
+  sigue siendo más fiable probar las tarjetas de una en una físicamente,
+  como en el procedimiento original.
+- **Puntuación del benchmark:** la app intenta extraerla automáticamente
+  de la salida de Phoronix; el formato exacto varía entre pruebas y
+  versiones, así que si el campo queda vacío, ábrelo en el desplegable
+  "Ver informe" o el archivo `benchmark.txt` de esa tarjeta y escribe el
+  número a mano en la tabla.
+- **dmesg:** leer los errores XID puede requerir permisos de root. Si el
+  proceso que lanza `python3 app.py` no tiene acceso, esa columna se
+  queda en "no comprobado" — ejecuta la app con `sudo` si necesitas esa
+  comprobación automática, o revisa `dmesg_xid.txt` a mano.
+- Pensada para un solo servidor y un solo usuario a la vez (no hay login
+  ni base de datos): los resultados de la sesión están en memoria y se
+  guardan además como JSON/TXT en `informes/<serie>/` por si se reinicia
+  la app.

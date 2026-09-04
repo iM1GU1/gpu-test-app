@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Informe comparativo GPU</title>
+<style>
+  body{font-family:"IBM Plex Sans",Arial,sans-serif;margin:40px;color:#131b24;background:#fff;}
+  h1{font-size:22px;margin-bottom:2px;}
+  .meta{color:#7c8a98;font-size:13px;margin-bottom:24px;}
+  table{border-collapse:collapse;width:100%;font-size:13px;}
+  th,td{border:1px solid #dbe2e8;padding:8px 10px;text-align:left;vertical-align:top;}
+  th{background:#eaeef1;font-size:11px;text-transform:uppercase;letter-spacing:.04em;}
+  td.num{text-align:right;font-family:monospace;}
+  .OK{color:#2f7d43;font-weight:600;}
+  .REVISAR{color:#a9790c;font-weight:600;}
+  .DEVOLVER{color:#b5402a;font-weight:600;}
+  .cards{margin-bottom:28px;}
+  .card{border:1px solid #dbe2e8;border-left:5px solid #7c8a98;border-radius:10px;padding:14px 16px;margin-bottom:10px;}
+  .card.OK{border-left-color:#2f7d43;}
+  .card.REVISAR{border-left-color:#a9790c;}
+  .card.DEVOLVER{border-left-color:#b5402a;}
+  .card-top{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;color:#7c8a98;margin-bottom:2px;}
+  .card-headline{font-size:16px;font-weight:700;margin-bottom:4px;}
+  .card.OK .card-headline{color:#2f7d43;}
+  .card.REVISAR .card-headline{color:#a9790c;}
+  .card.DEVOLVER .card-headline{color:#b5402a;}
+  .card-text{font-size:13px;color:#334;}
+  h2.section{font-size:15px;margin:0 0 10px;}
+  @media print{ body{margin:12mm;} }
+</style>
+</head>
+<body>
+  <h1>Informe comparativo de tarjetas GPU</h1>
+  <div class="meta">Generado el {{ generated }} &middot; {{ results|length }} tarjeta(s) probada(s)</div>
+
+  <h2 class="section">Resumen</h2>
+  <div class="cards">
+  {% for r in results %}
+    <div class="card {{ r.verdict }}">
+      <div class="card-top"><span>{{ r.name }} &middot; {{ r.serial }}</span><strong class="{{ r.verdict }}">{{ r.verdict or 'pendiente' }}</strong></div>
+      <div class="card-headline">{{ r.summary_headline or (r.verdict or 'Pendiente') }}</div>
+      <div class="card-text">{{ r.summary_text or 'Todavía no hay resumen para esta tarjeta.' }}</div>
+    </div>
+  {% else %}
+    <p>Todavía no se ha probado ninguna tarjeta.</p>
+  {% endfor %}
+  </div>
+
+  <h2 class="section">Detalle técnico</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Tarjeta / serie</th><th>Temp idle</th><th>Temp máx</th><th>Temp media</th>
+        <th>Potencia máx</th><th>Puntuación</th><th>Ref. puntuación</th><th>Ref. temp máx</th>
+        <th>DCGM</th><th>gpu-burn</th>
+        <th>memtest_vulkan</th><th>XID/ECC</th><th>Veredicto</th><th>Motivos</th><th>Notas</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in results %}
+      <tr>
+        <td>{{ r.name }}<br><small>{{ r.serial }}</small></td>
+        <td class="num">{{ r.temp_idle if r.temp_idle is not none else '—' }}</td>
+        <td class="num">{{ r.temp_max if r.temp_max is not none else '—' }}</td>
+        <td class="num">{{ r.temp_avg if r.temp_avg is not none else '—' }}</td>
+        <td class="num">{{ r.power_max if r.power_max is not none else '—' }}</td>
+        <td class="num">{{ r.benchmark_score if r.benchmark_score is not none else '—' }}</td>
+        <td class="num">{{ r.reference_score if r.reference_score is not none else '—' }}</td>
+        <td class="num">{{ r.reference_temp_max if r.reference_temp_max is not none else '—' }}</td>
+        <td>{{ 'Fail' if r.dcgm and r.dcgm.fail else ('Pass' if r.dcgm and r.dcgm.ran else '—') }}</td>
+        <td>{{ 'errores' if r.gpu_burn and r.gpu_burn.errors else ('ok' if r.gpu_burn and r.gpu_burn.ran else '—') }}</td>
+        <td>{{ 'errores' if r.memtest and r.memtest.errors else ('ok' if r.memtest and r.memtest.ran else '—') }}</td>
+        <td>{{ 'sí' if r.dmesg and r.dmesg.xid_found else 'no' }}</td>
+        <td class="{{ r.verdict }}">{{ r.verdict or 'pendiente' }}</td>
+        <td>{{ (r.verdict_reasons or [])|join('; ') }}</td>
+        <td>{{ r.notes or '' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="15">Todavía no se ha probado ninguna tarjeta.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

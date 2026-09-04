@@ -1,0 +1,740 @@
+#!/usr/bin/env python3
+"""
+Banco de validacion GPU - aplicacion local
+===========================================
+
+Interfaz web (Flask) que ejecuta en el propio servidor Ubuntu y orquesta
+toda la bateria de pruebas descrita en la guia "Banco de validacion de
+tarjetas GPU": identificacion, temperatura, DCGM diag, gpu-burn,
+memtest_vulkan y un benchmark comparable. El usuario elige las opciones
+en el navegador, pulsa "Iniciar" y la app hace el resto: lanza las
+herramientas, registra temperatura en segundo plano, calcula un veredicto
+(OK / REVISAR / DEVOLVER) y deja un informe comparativo listo para exportar.
+
+Arranque:
+    python3 app.py
+    -> abrir http://localhost:8080  (o http://<ip-del-servidor>:8080)
+
+Todas las rutas de los binarios externos son configurables por variable
+de entorno (ver README.md).
+"""
+
+import csv
+import io
+import json
+import os
+import re
+import shutil
+import statistics
+import subprocess
+import threading
+import time
+from datetime import datetime
+
+from flask import Flask, Response, jsonify, render_template, request
+
+# --------------------------------------------------------------------------
+# Configuracion
+# --------------------------------------------------------------------------
+
+NVIDIA_SMI_BIN = os.environ.get("NVIDIA_SMI_BIN", "nvidia-smi")
+DCGMI_BIN = os.environ.get("DCGMI_BIN", "dcgmi")
+GPU_BURN_BIN = os.environ.get("GPU_BURN_BIN", "./gpu-burn/gpu_burn")
+MEMTEST_VULKAN_BIN = os.environ.get("MEMTEST_VULKAN_BIN", "./memtest_vulkan/memtest_vulkan")
+PHORONIX_BIN = os.environ.get("PHORONIX_BIN", "phoronix-test-suite")
+PHORONIX_TEST = os.environ.get("PHORONIX_TEST", "unigine-superposition")
+
+REPORTS_DIR = os.environ.get("REPORTS_DIR", "informes")
+LOG_MAX_LINES = 600
+TEMP_ANOMALY_C = 8.0          # diferencia sobre la mediana del lote (mismo modelo) -> revisar
+SCORE_DROP_RATIO = 0.90       # puntuacion por debajo del 90% de la referencia/mejor -> revisar
+DEFAULT_TEMP_CEILING_C = 87.0  # techo generico si no hay temperatura de referencia del modelo
+
+app = Flask(__name__)
+
+# --------------------------------------------------------------------------
+# Estado global (herramienta de un solo usuario / un servidor)
+# --------------------------------------------------------------------------
+
+STATE = {
+    "running": False,
+    "current_gpu": None,       # "index / name / serial"
+    "current_step": None,
+    "log": [],
+    "results": [],             # lista de dicts, uno por tarjeta probada esta sesion
+    "current_proc": None,      # subprocess.Popen en curso (para poder detenerlo)
+    "stop_requested": False,
+}
+LOCK = threading.Lock()
+
+
+def log(line):
+    ts = datetime.now().strftime("%H:%M:%S")
+    with LOCK:
+        STATE["log"].append(f"[{ts}] {line}")
+        if len(STATE["log"]) > LOG_MAX_LINES:
+            STATE["log"] = STATE["log"][-LOG_MAX_LINES:]
+
+
+def set_step(step):
+    with LOCK:
+        STATE["current_step"] = step
+    log(step)
+
+
+def tool_available(path_or_bin):
+    if os.path.isabs(path_or_bin) or path_or_bin.startswith("./") or path_or_bin.startswith("../"):
+        return os.path.isfile(path_or_bin) and os.access(path_or_bin, os.X_OK)
+    return shutil.which(path_or_bin) is not None
+
+
+# --------------------------------------------------------------------------
+# Ejecucion de comandos
+# --------------------------------------------------------------------------
+
+def run_capture(cmd, timeout=None, cwd=None):
+    """Ejecuta un comando hasta que termina (o hasta timeout), escribe su
+    salida linea a linea en el log y devuelve (returncode, texto_completo)."""
+    log(f"$ {' '.join(cmd)}")
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+    except FileNotFoundError:
+        log(f"  (no encontrado: {cmd[0]}) - paso omitido")
+        return None, ""
+
+    with LOCK:
+        STATE["current_proc"] = proc
+
+    lines = []
+    start = time.time()
+    try:
+        for raw in proc.stdout:
+            line_txt = raw.rstrip("\n")
+            lines.append(line_txt)
+            log(line_txt)
+            if STATE["stop_requested"]:
+                proc.terminate()
+                break
+            if timeout and (time.time() - start) > timeout:
+                proc.terminate()
+                break
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    finally:
+        with LOCK:
+            STATE["current_proc"] = None
+
+    return proc.returncode, "\n".join(lines)
+
+
+def run_for_duration(cmd, seconds, cwd=None):
+    """Lanza un comando y lo detiene pasados `seconds` segundos (para
+    herramientas como memtest_vulkan que corren hasta que se interrumpen)."""
+    log(f"$ {' '.join(cmd)}   (se detendra a los {seconds}s)")
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, text=True, bufsize=1,
+        )
+    except FileNotFoundError:
+        log(f"  (no encontrado: {cmd[0]}) - paso omitido")
+        return ""
+
+    with LOCK:
+        STATE["current_proc"] = proc
+
+    lines = []
+    start = time.time()
+    while time.time() - start < seconds:
+        if STATE["stop_requested"]:
+            break
+        raw = proc.stdout.readline()
+        if raw:
+            line_txt = raw.rstrip("\n")
+            lines.append(line_txt)
+            log(line_txt)
+        elif proc.poll() is not None:
+            break
+        else:
+            time.sleep(0.1)
+
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    with LOCK:
+        STATE["current_proc"] = None
+    return "\n".join(lines)
+
+
+def nvidia_smi_query(fields, gpu_index=None, extra=None):
+    cmd = [NVIDIA_SMI_BIN]
+    if gpu_index is not None:
+        cmd += ["-i", str(gpu_index)]
+    cmd += [f"--query-gpu={fields}", "--format=csv,noheader,nounits"]
+    if extra:
+        cmd += extra
+    try:
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT, timeout=15)
+        return [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+    except Exception as e:
+        return None
+
+
+class TempSampler:
+    """Muestrea temperatura/potencia/reloj/uso cada segundo en un hilo
+    aparte mientras dura el resto de la bateria."""
+
+    def __init__(self, gpu_index):
+        self.gpu_index = gpu_index
+        self.samples = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            rows = nvidia_smi_query(
+                "temperature.gpu,power.draw,clocks.sm,utilization.gpu",
+                self.gpu_index,
+            )
+            if rows:
+                parts = [p.strip() for p in rows[0].split(",")]
+                try:
+                    temp = float(parts[0])
+                    power = float(parts[1])
+                    clock = float(parts[2])
+                    util = float(parts[3])
+                    self.samples.append((temp, power, clock, util))
+                except (ValueError, IndexError):
+                    pass
+            self._stop.wait(1.0)
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def summary(self):
+        if not self.samples:
+            return {"temp_max": None, "temp_avg": None, "power_max": None, "clock_avg": None}
+        temps = [s[0] for s in self.samples]
+        powers = [s[1] for s in self.samples]
+        clocks = [s[2] for s in self.samples]
+        return {
+            "temp_max": round(max(temps), 1),
+            "temp_avg": round(sum(temps) / len(temps), 1),
+            "power_max": round(max(powers), 1),
+            "clock_avg": round(sum(clocks) / len(clocks), 1),
+        }
+
+
+# --------------------------------------------------------------------------
+# Analisis de salidas (heuristicas explicitas, nunca silenciosas)
+# --------------------------------------------------------------------------
+
+def parse_dcgm(text):
+    if not text:
+        return {"ran": False, "fail": False, "note": "no ejecutado"}
+    fails = re.findall(r":\s*Fail\b", text)
+    return {"ran": True, "fail": len(fails) > 0, "fail_count": len(fails)}
+
+
+def parse_gpu_burn(text):
+    if not text:
+        return {"ran": False, "errors": False, "note": "no ejecutado"}
+    faulty = "FAULTY" in text.upper()
+    err_counts = [int(n) for n in re.findall(r"errors:\s*(\d+)", text, re.I)]
+    has_errors = faulty or any(n > 0 for n in err_counts)
+    gflops = re.findall(r"([\d.]+)\s*Gflop/s", text)
+    return {
+        "ran": True,
+        "errors": has_errors,
+        "gflops_last": float(gflops[-1]) if gflops else None,
+    }
+
+
+def parse_memtest_vulkan(text):
+    if not text:
+        return {"ran": False, "errors": False, "note": "no ejecutado"}
+    low = text.lower()
+    passed = "no any errors" in low or "testing passed" in low
+    has_error = ("error" in low) and not passed
+    return {"ran": True, "errors": has_error, "passed_clean": passed}
+
+
+def parse_dmesg_xid(text):
+    if text is None:
+        return {"checked": False, "xid_found": False, "note": "no se pudo leer dmesg (permisos)"}
+    found = bool(text.strip()) and "sin xid" not in text.lower()
+    return {"checked": True, "xid_found": found}
+
+
+def compute_verdict(result, all_results):
+    """Calcula el veredicto de una tarjeta.
+
+    Las comparaciones de rendimiento/temperatura solo tienen sentido entre
+    tarjetas del MISMO modelo: si el lote son modelos distintos (caso
+    tipico al comprar tarjetas sueltas de segunda mano), se usa en su
+    lugar la puntuacion/temperatura de referencia que el usuario haya
+    escrito a mano para esa tarjeta (buscada, por ejemplo, en TechPowerUp
+    o en los resultados publicos de ese modelo en OpenBenchmarking.org).
+    """
+    reasons = []
+    if result.get("dcgm", {}).get("fail"):
+        reasons.append("DCGM diag marco al menos un test en Fail")
+    if result.get("dmesg", {}).get("xid_found"):
+        reasons.append("Se encontraron errores XID en dmesg")
+    if result.get("gpu_burn", {}).get("errors"):
+        reasons.append("gpu-burn reporto errores de calculo")
+    if result.get("memtest", {}).get("errors"):
+        reasons.append("memtest_vulkan reporto errores de VRAM")
+    if reasons:
+        return "DEVOLVER", reasons
+
+    # Solo comparar contra otras tarjetas del mismo modelo (evita falsos
+    # positivos cuando el lote son modelos distintos).
+    siblings = [r for r in all_results if r["serial"] != result["serial"] and r["name"] == result["name"]]
+
+    score = result.get("benchmark_score")
+    ref_score = result.get("reference_score")
+    if score and ref_score:
+        if score < ref_score * SCORE_DROP_RATIO:
+            reasons.append(
+                f"Puntuacion {score:g} mas de un 10% por debajo de la referencia del modelo ({ref_score:g})"
+            )
+    elif score:
+        sibling_scores = [r["benchmark_score"] for r in siblings if r.get("benchmark_score")]
+        if sibling_scores:
+            best = max(sibling_scores + [score])
+            if score < best * SCORE_DROP_RATIO:
+                reasons.append(
+                    f"Puntuacion {score:g} mas de un 10% por debajo de otra tarjeta igual del lote ({best:g})"
+                )
+
+    temp = result.get("temp_max")
+    ref_temp = result.get("reference_temp_max")
+    if temp is not None and ref_temp:
+        if temp >= ref_temp:
+            reasons.append(f"Temp. maxima {temp:g}C alcanza o supera el limite de referencia ({ref_temp:g}C)")
+    elif temp is not None:
+        sibling_temps = [r["temp_max"] for r in siblings if r.get("temp_max") is not None]
+        if sibling_temps:
+            median = statistics.median(sibling_temps + [temp])
+            if temp - median >= TEMP_ANOMALY_C:
+                reasons.append(
+                    f"Temp. maxima {temp:g}C, {temp - median:.1f}C por encima de otra tarjeta igual del lote"
+                )
+        elif temp >= DEFAULT_TEMP_CEILING_C:
+            reasons.append(
+                f"Temp. maxima {temp:g}C por encima del techo generico de aviso ({DEFAULT_TEMP_CEILING_C:g}C, "
+                "sin referencia especifica del modelo)"
+            )
+
+    if reasons:
+        return "REVISAR", reasons
+    return "OK", []
+
+
+REASON_PLAIN = [
+    (re.compile(r"DCGM diag"), "el diagnóstico oficial de NVIDIA detectó al menos un fallo"),
+    (re.compile(r"errores XID"), "el sistema registró errores internos de la tarjeta (códigos XID) durante la prueba"),
+    (re.compile(r"gpu-burn"), "la prueba de cálculo intensivo (gpu-burn) encontró errores de cómputo"),
+    (re.compile(r"memtest_vulkan"), "la prueba de memoria de vídeo (VRAM) encontró errores"),
+    (re.compile(r"Puntuacion|Puntuación"), "el rendimiento en el benchmark quedó notablemente por debajo de lo esperado para este modelo"),
+    (re.compile(r"Temp\."), "la temperatura máxima bajo estrés fue más alta de lo esperado"),
+]
+
+
+def plain_reason(reason):
+    for pattern, text in REASON_PLAIN:
+        if pattern.search(reason):
+            return text
+    return reason
+
+
+def build_plain_summary(result):
+    """Genera un resumen en lenguaje llano (sin jerga tecnica) para que
+    cualquier persona, sea o no experta, entienda de un vistazo si la
+    tarjeta esta bien, hay que revisarla o conviene devolverla."""
+    verdict = result.get("verdict")
+    reasons = result.get("verdict_reasons") or []
+    name = result.get("name") or "La tarjeta"
+
+    headline = {
+        "OK": "Todo en orden",
+        "REVISAR": "Revisar antes de decidir",
+        "DEVOLVER": "Se recomienda devolver",
+    }.get(verdict, "Pruebas incompletas")
+
+    sentences = []
+    if verdict == "OK":
+        sentences.append(f"{name} pasó todas las pruebas realizadas sin ningún error.")
+    elif verdict == "REVISAR":
+        sentences.append(f"{name} no dio fallos graves, pero conviene revisarla con calma antes de decidir.")
+    elif verdict == "DEVOLVER":
+        sentences.append(f"{name} presentó fallos durante las pruebas; con esto ya hay motivo suficiente para devolverla.")
+    else:
+        sentences.append(f"{name} todavía no tiene pruebas completas.")
+
+    friendly_reasons = [plain_reason(r) for r in reasons]
+    if len(friendly_reasons) == 1:
+        sentences.append("Motivo: " + friendly_reasons[0][0].upper() + friendly_reasons[0][1:] + ".")
+    elif friendly_reasons:
+        sentences.append("Motivos: " + "; ".join(friendly_reasons) + ".")
+
+    temp_max = result.get("temp_max")
+    if temp_max is not None:
+        ceiling = result.get("reference_temp_max") or DEFAULT_TEMP_CEILING_C
+        qualifier = "dentro de lo normal" if temp_max < ceiling else "más alta de lo recomendable para este modelo"
+        sentences.append(f"Temperatura máxima registrada bajo estrés: {temp_max:g}°C ({qualifier}).")
+
+    tests_run = []
+    if result.get("dcgm", {}).get("ran"):
+        tests_run.append("diagnóstico oficial NVIDIA")
+    if result.get("gpu_burn", {}).get("ran"):
+        tests_run.append("estrés de cálculo")
+    if result.get("memtest", {}).get("ran"):
+        tests_run.append("estrés de memoria de vídeo")
+    if result.get("benchmark_ran"):
+        tests_run.append("benchmark de rendimiento")
+    if tests_run:
+        sentences.append("Pruebas realizadas: " + ", ".join(tests_run) + ".")
+
+    return headline, " ".join(sentences)
+
+
+def recompute_all_verdicts():
+    with LOCK:
+        results = STATE["results"]
+        for r in results:
+            if not r.get("manual_verdict"):
+                verdict, reasons = compute_verdict(r, results)
+                r["verdict"] = verdict
+                r["verdict_reasons"] = reasons
+            headline, text = build_plain_summary(r)
+            r["summary_headline"] = headline
+            r["summary_text"] = text
+
+
+# --------------------------------------------------------------------------
+# Bateria de pruebas para una tarjeta
+# --------------------------------------------------------------------------
+
+def test_one_gpu(idx, opts):
+    rows = nvidia_smi_query("name,serial,uuid,driver_version", idx)
+    if not rows:
+        log(f"No se pudo leer la tarjeta indice {idx}, se salta.")
+        return
+    name, serial, uuid, driver = [p.strip() for p in rows[0].split(",")]
+    if not serial or serial == "[N/A]":
+        # Las GeForce de consumo no traen numero de serie legible por nvidia-smi;
+        # usamos el UUID de la GPU (unico de verdad) como identificador en su lugar.
+        serial = uuid if uuid and uuid != "[N/A]" else f"idx{idx}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    with LOCK:
+        STATE["current_gpu"] = f"{idx} / {name} / {serial}"
+
+    outdir = os.path.join(REPORTS_DIR, serial)
+    os.makedirs(outdir, exist_ok=True)
+
+    result = {
+        "index": idx, "name": name, "serial": serial, "uuid": uuid,
+        "driver": driver, "started_at": datetime.now().isoformat(timespec="seconds"),
+        "benchmark_score": None, "notes": "",
+        "reference_score": None, "reference_temp_max": None,
+    }
+
+    set_step(f"[{name} / {serial}] Midiendo temperatura en reposo")
+    baseline = nvidia_smi_query("temperature.gpu", idx)
+    result["temp_idle"] = float(baseline[0]) if baseline else None
+
+    sampler = TempSampler(idx)
+    sampler.start()
+
+    if opts.get("dcgm_level"):
+        set_step(f"[{name}] DCGM diag -r {opts['dcgm_level']} (puede tardar)")
+        rc, out = run_capture([DCGMI_BIN, "diag", "-r", str(opts["dcgm_level"]), "-i", str(idx)])
+        with open(os.path.join(outdir, "dcgm_diag.txt"), "w") as f:
+            f.write(out)
+        result["dcgm"] = parse_dcgm(out)
+    else:
+        result["dcgm"] = {"ran": False}
+
+    if opts.get("burn_seconds"):
+        set_step(f"[{name}] gpu-burn durante {opts['burn_seconds']}s")
+        out = run_for_duration([GPU_BURN_BIN, "-i", str(idx), str(opts["burn_seconds"])],
+                                opts["burn_seconds"] + 20)
+        with open(os.path.join(outdir, "gpu_burn.txt"), "w") as f:
+            f.write(out)
+        result["gpu_burn"] = parse_gpu_burn(out)
+    else:
+        result["gpu_burn"] = {"ran": False}
+
+    if opts.get("memtest_seconds"):
+        set_step(f"[{name}] memtest_vulkan durante {opts['memtest_seconds']}s")
+        out = run_for_duration([MEMTEST_VULKAN_BIN], opts["memtest_seconds"])
+        with open(os.path.join(outdir, "memtest_vulkan.txt"), "w") as f:
+            f.write(out)
+        result["memtest"] = parse_memtest_vulkan(out)
+    else:
+        result["memtest"] = {"ran": False}
+
+    if opts.get("run_benchmark"):
+        set_step(f"[{name}] Benchmark ({PHORONIX_TEST})")
+        rc, out = run_capture([PHORONIX_BIN, "batch-benchmark", PHORONIX_TEST], timeout=1800)
+        with open(os.path.join(outdir, "benchmark.txt"), "w") as f:
+            f.write(out)
+        m = re.search(r"Average:\s*([\d.]+)", out) or re.search(r"Score:\s*([\d.]+)", out, re.I)
+        result["benchmark_score"] = float(m.group(1)) if m else None
+        result["benchmark_ran"] = True
+        if result["benchmark_score"] is None:
+            result["notes"] += " Revisa benchmark.txt y anota la puntuacion a mano; no se pudo extraer automaticamente."
+    else:
+        result["benchmark_ran"] = False
+
+    set_step(f"[{name}] Cerrando registro de temperatura")
+    sampler.stop()
+    result.update(sampler.summary())
+
+    set_step(f"[{name}] Comprobando ECC / errores XID")
+    ecc_rows = nvidia_smi_query("ecc.errors.uncorrected.aggregate.total", idx)
+    result["ecc_uncorrected"] = ecc_rows[0] if ecc_rows else None
+    with open(os.path.join(outdir, "ecc.txt"), "w") as f:
+        rc, out_ecc = run_capture([NVIDIA_SMI_BIN, "-i", str(idx), "-q", "-d", "ECC,PAGE_RETIREMENT"])
+        f.write(out_ecc or "")
+    try:
+        dmesg_out = subprocess.check_output(
+            "dmesg | grep -i xid || true", shell=True, text=True, timeout=10
+        )
+    except Exception:
+        dmesg_out = None
+    with open(os.path.join(outdir, "dmesg_xid.txt"), "w") as f:
+        f.write(dmesg_out or "no se pudo leer dmesg")
+    result["dmesg"] = parse_dmesg_xid(dmesg_out)
+
+    with LOCK:
+        STATE["results"] = [r for r in STATE["results"] if r["serial"] != serial]
+        STATE["results"].append(result)
+
+    recompute_all_verdicts()
+
+    with LOCK:
+        current = next(r for r in STATE["results"] if r["serial"] == serial)
+    with open(os.path.join(outdir, "results.json"), "w") as f:
+        json.dump(current, f, indent=2, ensure_ascii=False)
+
+    verdict = current.get("verdict", "pendiente")
+    set_step(f"[{name} / {serial}] Terminado -> {verdict}")
+
+
+def worker_run(gpu_indices, opts):
+    with LOCK:
+        STATE["running"] = True
+        STATE["stop_requested"] = False
+    try:
+        os.makedirs(REPORTS_DIR, exist_ok=True)
+        for idx in gpu_indices:
+            if STATE["stop_requested"]:
+                log("Ejecucion detenida por el usuario.")
+                break
+            test_one_gpu(idx, opts)
+        log("Bateria completa." if not STATE["stop_requested"] else "Bateria interrumpida.")
+    except Exception as e:
+        log(f"ERROR inesperado: {e}")
+    finally:
+        with LOCK:
+            STATE["running"] = False
+            STATE["current_gpu"] = None
+            STATE["current_step"] = None
+
+
+# --------------------------------------------------------------------------
+# Rutas
+# --------------------------------------------------------------------------
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/gpus")
+def api_gpus():
+    rows = nvidia_smi_query("index,name,serial")
+    if rows is None:
+        return jsonify({"available": False, "gpus": []})
+    gpus = []
+    for row in rows:
+        parts = [p.strip() for p in row.split(",")]
+        if len(parts) >= 3:
+            gpus.append({"index": int(parts[0]), "name": parts[1], "serial": parts[2]})
+    return jsonify({"available": True, "gpus": gpus})
+
+
+@app.route("/api/tools")
+def api_tools():
+    return jsonify({
+        "nvidia_smi": tool_available(NVIDIA_SMI_BIN),
+        "dcgmi": tool_available(DCGMI_BIN),
+        "gpu_burn": tool_available(GPU_BURN_BIN),
+        "memtest_vulkan": tool_available(MEMTEST_VULKAN_BIN),
+        "phoronix": tool_available(PHORONIX_BIN),
+    })
+
+
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    with LOCK:
+        if STATE["running"]:
+            return jsonify({"error": "ya hay una bateria en curso"}), 409
+
+    body = request.get_json(force=True) or {}
+    gpu_indices = body.get("gpu_indices") or []
+    if not gpu_indices:
+        return jsonify({"error": "selecciona al menos una tarjeta"}), 400
+
+    opts = {
+        "dcgm_level": int(body.get("dcgm_level") or 0),
+        "burn_seconds": int(body.get("burn_seconds") or 0),
+        "memtest_seconds": int(body.get("memtest_seconds") or 0),
+        "run_benchmark": bool(body.get("run_benchmark")),
+    }
+
+    t = threading.Thread(target=worker_run, args=(gpu_indices, opts), daemon=True)
+    t.start()
+    return jsonify({"started": True}), 202
+
+
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    with LOCK:
+        STATE["stop_requested"] = True
+        proc = STATE["current_proc"]
+    if proc:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    return jsonify({"stopping": True})
+
+
+@app.route("/api/status")
+def api_status():
+    with LOCK:
+        return jsonify({
+            "running": STATE["running"],
+            "current_gpu": STATE["current_gpu"],
+            "current_step": STATE["current_step"],
+            "log": STATE["log"][-120:],
+            "results_count": len(STATE["results"]),
+        })
+
+
+@app.route("/api/results")
+def api_results():
+    with LOCK:
+        return jsonify(STATE["results"])
+
+
+@app.route("/api/results/<serial>", methods=["PATCH"])
+def api_patch_result(serial):
+    body = request.get_json(force=True) or {}
+    with LOCK:
+        for r in STATE["results"]:
+            if r["serial"] == serial:
+                if "benchmark_score" in body:
+                    try:
+                        r["benchmark_score"] = float(body["benchmark_score"])
+                    except (TypeError, ValueError):
+                        r["benchmark_score"] = None
+                if "reference_score" in body:
+                    try:
+                        r["reference_score"] = float(body["reference_score"])
+                    except (TypeError, ValueError):
+                        r["reference_score"] = None
+                if "reference_temp_max" in body:
+                    try:
+                        r["reference_temp_max"] = float(body["reference_temp_max"])
+                    except (TypeError, ValueError):
+                        r["reference_temp_max"] = None
+                if "notes" in body:
+                    r["notes"] = body["notes"]
+                if "manual_verdict" in body:
+                    r["manual_verdict"] = body["manual_verdict"] or None
+                    if r["manual_verdict"]:
+                        r["verdict"] = r["manual_verdict"]
+                        r["verdict_reasons"] = ["Veredicto asignado manualmente"]
+                break
+        else:
+            return jsonify({"error": "no encontrado"}), 404
+    recompute_all_verdicts()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/report.csv")
+def report_csv():
+    with LOCK:
+        results = list(STATE["results"])
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Tarjeta", "Serie", "Temp idle (C)", "Temp max (C)", "Temp media (C)",
+                "Potencia max (W)", "Puntuacion", "Ref. puntuacion", "Ref. temp max (C)",
+                "DCGM", "gpu-burn", "memtest_vulkan",
+                "XID/ECC", "Veredicto", "Motivos", "Notas"])
+    for r in results:
+        w.writerow([
+            r.get("name"), r.get("serial"), r.get("temp_idle"), r.get("temp_max"),
+            r.get("temp_avg"), r.get("power_max"), r.get("benchmark_score"),
+            r.get("reference_score"), r.get("reference_temp_max"),
+            "Fail" if r.get("dcgm", {}).get("fail") else ("Pass" if r.get("dcgm", {}).get("ran") else "-"),
+            "errores" if r.get("gpu_burn", {}).get("errors") else ("ok" if r.get("gpu_burn", {}).get("ran") else "-"),
+            "errores" if r.get("memtest", {}).get("errors") else ("ok" if r.get("memtest", {}).get("ran") else "-"),
+            "si" if r.get("dmesg", {}).get("xid_found") else "no",
+            r.get("verdict", "pendiente"),
+            "; ".join(r.get("verdict_reasons", [])),
+            r.get("notes", ""),
+        ])
+    return Response(buf.getvalue(), mimetype="text/csv",
+                     headers={"Content-Disposition": "attachment; filename=informe_gpu.csv"})
+
+
+@app.route("/api/report.html")
+def report_html():
+    with LOCK:
+        results = list(STATE["results"])
+    return render_template("report.html", results=results, generated=datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+
+def load_existing_results():
+    """Recupera los resultados de tarjetas ya probadas en sesiones anteriores
+    (la app se reinicia cada vez que se apaga la torre para cambiar de tarjeta,
+    asi que sin esto la tabla solo mostraria la ultima)."""
+    if not os.path.isdir(REPORTS_DIR):
+        return
+    loaded = []
+    for serial in sorted(os.listdir(REPORTS_DIR)):
+        path = os.path.join(REPORTS_DIR, serial, "results.json")
+        if os.path.isfile(path):
+            try:
+                with open(path) as f:
+                    loaded.append(json.load(f))
+            except (json.JSONDecodeError, OSError):
+                pass
+    if loaded:
+        with LOCK:
+            STATE["results"] = loaded
+        recompute_all_verdicts()
+        log(f"Cargados {len(loaded)} resultado(s) de sesiones anteriores desde {REPORTS_DIR}/")
+
+
+if __name__ == "__main__":
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    load_existing_results()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), debug=False, threaded=True)
