@@ -258,6 +258,7 @@ jobs:
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BerserkEngine.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessFen.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
           retention-days: 1
 
       - name: Convert pretrained chess CNN to TensorFlow Lite
