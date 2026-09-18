@@ -247,10 +247,45 @@ jobs:
           g.write_text(s)
           PY
 
-      - name: Export generated v12 sources
+      - name: Apply v13 stability auto-turn and reset
+        run: |
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v13/MainActivity.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v13/OverlayService.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v13/AccessibilityBoardStore.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/AccessibilityBoardStore.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v13/BerserkEngine.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BerserkEngine.kt
+          python3 - <<'PY'
+          from pathlib import Path
+
+          acc=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessAccessibilityService.kt')
+          s=acc.read_text()
+          old='''    override fun onAccessibilityEvent(event: AccessibilityEvent?) = scheduleScan()
+    override fun onInterrupt() = Unit
+'''
+          new='''    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        active = this
+        if (!AccessibilityBoardStore.isConnected()) {
+            AccessibilityBoardStore.setConnected(true)
+        }
+        scheduleScan()
+    }
+
+    override fun onInterrupt() {
+        scheduleScan()
+    }
+'''
+          if old in s:
+              s=s.replace(old,new,1)
+          acc.write_text(s)
+
+          g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
+          gs=g.read_text().replace('versionCode = 12', 'versionCode = 13').replace('versionName = "0.12.0"', 'versionName = "0.13.0"')
+          g.write_text(gs)
+          PY
+
+      - name: Export generated v13 sources
         uses: actions/upload-artifact@v4
         with:
-          name: v12-generated-sources
+          name: v13-generated-sources
           path: |
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessAccessibilityService.kt
@@ -299,7 +334,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v12-ranked-colors-APK
+          name: Chess22kOverlay-v13-stable-auto-reset-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
