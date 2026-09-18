@@ -255,10 +255,23 @@ jobs:
           cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v13/BerserkEngine.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BerserkEngine.kt
           python3 "$GITHUB_WORKSPACE/chatgpt-build/apply_v13.py" /tmp/chess-overlay/BerserkOverlay
 
-      - name: Export generated v13 sources
+      - name: Apply v14 mobile human sparring
+        run: |
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v14/MainActivity.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v14/OverlayService.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v14/BoardOverlayView.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v14/HumanProfile.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/HumanProfile.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
+          s=g.read_text().replace('versionCode = 13', 'versionCode = 14').replace('versionName = "0.13.0"', 'versionName = "0.14.0"')
+          g.write_text(s)
+          PY
+
+      - name: Export generated v14 sources
         uses: actions/upload-artifact@v4
         with:
-          name: v13-generated-sources
+          name: v14-generated-sources
           path: |
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessAccessibilityService.kt
@@ -267,6 +280,7 @@ jobs:
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessFen.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/HumanProfile.kt
           retention-days: 1
 
       - name: Convert pretrained chess CNN to TensorFlow Lite
@@ -307,7 +321,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v13-stable-auto-reset-APK
+          name: Chess22kOverlay-v14-human-sparring-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
