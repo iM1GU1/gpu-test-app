@@ -209,6 +209,55 @@ jobs:
           g.write_text(s)
           PY
 
+      - name: Switch v9 to Accessibility tree input
+        run: |
+          base64 -d "$GITHUB_WORKSPACE/chatgpt-build/v9patches.b64" > /tmp/v9patches.zip
+          rm -rf /tmp/v9patches
+          mkdir -p /tmp/v9patches
+          unzip -q /tmp/v9patches.zip -d /tmp/v9patches
+
+          cp /tmp/v9patches/MainActivity.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
+          cp /tmp/v9patches/OverlayService.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
+          cp /tmp/v9patches/AccessibilityBoardStore.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/AccessibilityBoardStore.kt
+          cp /tmp/v9patches/ChessAccessibilityService.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessAccessibilityService.kt
+          cp /tmp/v9patches/activity_main.xml /tmp/chess-overlay/BerserkOverlay/app/src/main/res/layout/activity_main.xml
+          mkdir -p /tmp/chess-overlay/BerserkOverlay/app/src/main/res/xml
+          cp /tmp/v9patches/res/xml/accessibility_service_config.xml /tmp/chess-overlay/BerserkOverlay/app/src/main/res/xml/accessibility_service_config.xml
+
+          python3 - <<'PY'
+          from pathlib import Path
+          manifest=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/AndroidManifest.xml')
+          m=manifest.read_text()
+          m=m.replace('android:label="Berserk Overlay"', 'android:label="Chess22k Accessibility Overlay"')
+          service='''
+
+        <service
+            android:name=".ChessAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>'''
+          if 'android:name=".ChessAccessibilityService"' not in m:
+              m=m.replace('''        <service
+            android:name=".OverlayService"
+            android:exported="false" />''',
+                          service + '''
+
+        <service
+            android:name=".OverlayService"
+            android:exported="false" />''')
+          manifest.write_text(m)
+
+          g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
+          s=g.read_text().replace('versionCode = 8','versionCode = 9').replace('versionName = "0.8.0"','versionName = "0.9.0"')
+          g.write_text(s)
+          PY
+
       - name: Convert pretrained chess CNN to TensorFlow Lite
         run: |
           python3 -m pip install --quiet --upgrade pip
@@ -247,7 +296,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v8-fullscreen-capture-APK
+          name: Chess22kOverlay-v9-accessibility-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
