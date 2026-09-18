@@ -94,6 +94,8 @@ class OverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -133,9 +135,12 @@ class OverlayService : Service() {
 
         val white = roundButton("♔", Color.WHITE, Color.BLACK, Color.rgb(115, 115, 115), "Calcular blancas")
         val black = roundButton("♚", Color.BLACK, Color.WHITE, Color.rgb(220, 220, 220), "Calcular negras")
+        val reset = roundButton("↻", Color.rgb(70, 70, 70), Color.WHITE, Color.rgb(190, 190, 190), "Resetear motor y tablero")
         panel.addView(white)
         panel.addView(Space(this).apply { layoutParams = LinearLayout.LayoutParams(dp(6), 1) })
         panel.addView(black)
+        panel.addView(Space(this).apply { layoutParams = LinearLayout.LayoutParams(dp(6), 1) })
+        panel.addView(reset)
 
         panelParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -151,6 +156,10 @@ class OverlayService : Service() {
         wm.addView(panel, panelParams)
         attachTapAndDrag(white, true)
         attachTapAndDrag(black, false)
+        reset.setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            hardReset()
+        }
     }
 
     private fun addStatusBubble() {
