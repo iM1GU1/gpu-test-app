@@ -215,7 +215,8 @@ jobs:
 
       - name: Apply v10 reliable click and accessibility parsing
         run: |
-          python3 "$GITHUB_WORKSPACE/chatgpt-build/apply_v10.py"             /tmp/chess-overlay/BerserkOverlay             "$GITHUB_WORKSPACE/chatgpt-build/v10patches.b64"
+          cat "$GITHUB_WORKSPACE"/chatgpt-build/v10chunks/part* > /tmp/v10patches.b64
+          python3 "$GITHUB_WORKSPACE/chatgpt-build/apply_v10.py"             /tmp/chess-overlay/BerserkOverlay             /tmp/v10patches.b64
 
       - name: Convert pretrained chess CNN to TensorFlow Lite
         run: |
