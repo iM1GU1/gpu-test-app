@@ -193,6 +193,22 @@ jobs:
         run: |
           python3 "$GITHUB_WORKSPACE/chatgpt-build/patch_arrow_redraw.py"             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt             /tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts
 
+      - name: Fix full-screen capture and first-frame handshake
+        run: |
+          base64 -d "$GITHUB_WORKSPACE/chatgpt-build/v8patches.b64" > /tmp/v8patches.zip
+          rm -rf /tmp/v8patches
+          mkdir -p /tmp/v8patches
+          unzip -q /tmp/v8patches.zip -d /tmp/v8patches
+          cp /tmp/v8patches/MainActivity.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
+          cp /tmp/v8patches/ProjectionService.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ProjectionService.kt
+          cp /tmp/v8patches/ProjectionStore.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ProjectionStore.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
+          s=g.read_text().replace('versionCode = 7','versionCode = 8').replace('versionName = "0.7.0"','versionName = "0.8.0"')
+          g.write_text(s)
+          PY
+
       - name: Convert pretrained chess CNN to TensorFlow Lite
         run: |
           python3 -m pip install --quiet --upgrade pip
@@ -231,7 +247,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v7-arrow-fix-APK
+          name: Chess22kOverlay-v8-fullscreen-capture-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
