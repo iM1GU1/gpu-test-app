@@ -19,7 +19,10 @@ import android.widget.LinearLayout
 import android.widget.Space
 import android.widget.TextView
 import java.util.LinkedHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 
 class OverlayService : Service() {
@@ -31,7 +34,7 @@ class OverlayService : Service() {
     private lateinit var statusParams: WindowManager.LayoutParams
     private lateinit var engine: BerserkEngine
 
-    private val worker = Executors.newSingleThreadExecutor()
+    @Volatile private var worker = newWorker()
     private val main = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
 
@@ -42,19 +45,50 @@ class OverlayService : Service() {
     private var lastPrefetchGeneration = -1L
     private var requestToken = 0L
     private var statusHideToken = 0L
+    private val searchSeq = AtomicLong(0L)
+    @Volatile private var activeSearchId = 0L
+    private var seenGeneration = -1L
+    private var processedGeneration = -1L
+    private var stableSinceMs = 0L
+    private var lastStableSnapshot: AccessibilityBoardStore.Snapshot? = null
+    @Volatile private var autoTurnWhite: Boolean? = null
+    private var lastForcedScanAt = 0L
+
+    private fun newWorker() = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue()
+    )
 
     private val prefetchRunnable = object : Runnable {
         override fun run() {
             if (destroyed) return
+            val now = android.os.SystemClock.elapsedRealtime()
             val generation = AccessibilityBoardStore.generation()
-            if (generation > 0L && generation != lastPrefetchGeneration) {
-                lastPrefetchGeneration = generation
+
+            if (generation > 0L && generation != seenGeneration) {
+                seenGeneration = generation
+                stableSinceMs = now
+                if (::resultView.isInitialized) resultView.setAnalysis(emptyList())
+                cancelPendingEngineWork(false)
+            }
+
+            if (generation > 0L &&
+                generation != processedGeneration &&
+                now - stableSinceMs >= 65L
+            ) {
+                processedGeneration = generation
                 AccessibilityBoardStore.snapshot()?.let { snapshot ->
-                    if (::resultView.isInitialized) resultView.setAnalysis(emptyList())
-                    worker.execute { precomputePrimary(snapshot, generation) }
+                    processStablePosition(snapshot, generation)
                 }
             }
-            main.postDelayed(this, 90L)
+
+            if (AccessibilityBoardStore.ageMs() > 1200L &&
+                now - lastForcedScanAt > 750L
+            ) {
+                lastForcedScanAt = now
+                runCatching { ChessAccessibilityService.current()?.readBoardNow() }
+            }
+
+            main.postDelayed(this, 35L)
         }
     }
 
