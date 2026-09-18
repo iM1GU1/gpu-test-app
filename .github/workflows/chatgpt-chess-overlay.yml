@@ -213,6 +213,10 @@ jobs:
         run: |
           python3 "$GITHUB_WORKSPACE/chatgpt-build/apply_v9.py"             /tmp/chess-overlay/BerserkOverlay             "$GITHUB_WORKSPACE/chatgpt-build/v9patches.b64"
 
+      - name: Apply v10 reliable click and accessibility parsing
+        run: |
+          python3 "$GITHUB_WORKSPACE/chatgpt-build/apply_v10.py"             /tmp/chess-overlay/BerserkOverlay             "$GITHUB_WORKSPACE/chatgpt-build/v10patches.b64"
+
       - name: Convert pretrained chess CNN to TensorFlow Lite
         run: |
           python3 -m pip install --quiet --upgrade pip
@@ -251,7 +255,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v9-accessibility-APK
+          name: Chess22kOverlay-v10-accessibility-fix-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
