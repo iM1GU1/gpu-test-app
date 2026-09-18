@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Chess22k Overlay"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Analiza el tablero visible y dibuja flechas de la casilla de origen a la de destino."
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/btnOverlayPermission"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="1. Permitir superposición" />
+
+        <Button
+            android:id="@+id/btnCapturePermission"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="2. Permitir captura de pantalla" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="Número de jugadas" />
+
+        <RadioGroup
+            android:id="@+id/groupMultiPv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton android:id="@+id/pv1" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="1" android:checked="true" />
+            <RadioButton android:id="@+id/pv2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="2" />
+            <RadioButton android:id="@+id/pv3" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="3" />
+        </RadioGroup>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="Orientación del tablero (color que está abajo)" />
+
+        <RadioGroup
+            android:id="@+id/groupSide"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton android:id="@+id/sideWhite" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Blancas" android:checked="true" />
+            <RadioButton android:id="@+id/sideBlack" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Negras" />
+        </RadioGroup>
+
+        <Button
+            android:id="@+id/btnStartOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="3. Mostrar controles flotantes" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="Estado: sin iniciar"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="IMPORTANTE — calibración una vez por tema/tamaño: abre en tu app de ajedrez una partida NUEVA sin mover ninguna pieza. Muestra los controles flotantes, pulsa Ajustar tablero, encaja el marco exactamente sobre las 64 casillas y pulsa Guardar inicio. Después ya puedes ir a cualquier posición de ese mismo tablero y pulsar Calcular BLANCAS o Calcular NEGRAS. Si cambias piezas, colores, zoom u orientación, vuelve a calibrar."
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+</ScrollView>
