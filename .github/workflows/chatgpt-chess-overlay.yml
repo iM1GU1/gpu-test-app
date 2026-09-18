@@ -176,56 +176,7 @@ jobs:
 
       - name: Fix MediaProjection static-frame fallback
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          p=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt')
-          s=p.read_text()
-          pattern=r'''    private fun waitForFreshFrame\(.*?(?=    private fun )'''
-          replacement='''    private fun waitForFreshFrame(previousGeneration: Long, attempt: Int, onReady: (android.graphics.Bitmap) -> Unit) {
-              if (ProjectionStore.generation() > previousGeneration) {
-                  val fresh = ProjectionStore.copyLatest()
-                  if (fresh != null) {
-                      onReady(fresh)
-                      return
-                  }
-              }
-
-              // Some Android/OEM implementations only emit a MediaProjection frame
-              // when the captured content changes. Our floating overlay may be excluded
-              // from capture, so hiding it does not necessarily trigger a new frame.
-              // After a short grace period, safely reuse the latest valid frame.
-              if (attempt >= 5) {
-                  val cached = ProjectionStore.copyLatest()
-                  if (cached != null) {
-                      onReady(cached)
-                  } else {
-                      setCaptureOverlaysVisible(true)
-                      android.widget.Toast.makeText(
-                          this,
-                          "No hay ninguna captura disponible. Vuelve a abrir la app y pulsa Permitir captura de pantalla.",
-                          android.widget.Toast.LENGTH_LONG
-                      ).show()
-                  }
-                  return
-              }
-
-              main.postDelayed({
-                  waitForFreshFrame(previousGeneration, attempt + 1, onReady)
-              }, 120)
-          }
-
-'''
-          s2,n=re.subn(pattern,replacement,s,count=1,flags=re.S)
-          if n != 1:
-              raise SystemExit('waitForFreshFrame function not found')
-          p.write_text(s2)
-
-          g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
-          gs=g.read_text().replace('versionCode = 5', 'versionCode = 6').replace('versionName = "0.5.0"', 'versionName = "0.6.0"')
-          g.write_text(gs)
-          PY
+          python3 "$GITHUB_WORKSPACE/chatgpt-build/patch_capture_fallback.py"             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt             /tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts
 
       - name: Convert pretrained chess CNN to TensorFlow Lite
         run: |
