@@ -218,6 +218,19 @@ jobs:
           cat "$GITHUB_WORKSPACE"/chatgpt-build/v10chunks/part* > /tmp/v10patches.b64
           python3 "$GITHUB_WORKSPACE/chatgpt-build/apply_v10.py"             /tmp/chess-overlay/BerserkOverlay             /tmp/v10patches.b64
 
+      - name: Export generated v10 sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-generated-sources
+          path: |
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessAccessibilityService.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/AccessibilityBoardStore.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BerserkEngine.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessFen.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt
+          retention-days: 1
+
       - name: Convert pretrained chess CNN to TensorFlow Lite
         run: |
           python3 -m pip install --quiet --upgrade pip
