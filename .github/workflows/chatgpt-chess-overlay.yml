@@ -128,6 +128,24 @@ jobs:
           g.write_text(gs)
           PY
 
+      - name: Fix startup theme and bump version
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          styles=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/res/values/styles.xml')
+          s=styles.read_text()
+          s=s.replace('parent="android:style/Theme.Material.Light.NoActionBar"', 'parent="Theme.AppCompat.Light.NoActionBar"')
+          styles.write_text(s)
+
+          manifest=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/AndroidManifest.xml')
+          m=manifest.read_text().replace('android:label="Berserk Overlay"', 'android:label="Chess22k Overlay"')
+          manifest.write_text(m)
+
+          gradle=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
+          g=gradle.read_text().replace('versionCode = 1', 'versionCode = 2').replace('versionName = "0.1.0"', 'versionName = "0.2.0"')
+          gradle.write_text(g)
+          PY
+
       - name: Build debug APK
         working-directory: /tmp/chess-overlay/BerserkOverlay
         run: gradle --no-daemon --stacktrace assembleDebug
@@ -140,7 +158,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-APK
+          name: Chess22kOverlay-v2-fixed-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
