@@ -218,10 +218,29 @@ jobs:
           cat "$GITHUB_WORKSPACE"/chatgpt-build/v10chunks/part* > /tmp/v10patches.b64
           python3 "$GITHUB_WORKSPACE/chatgpt-build/apply_v10.py"             /tmp/chess-overlay/BerserkOverlay             /tmp/v10patches.b64
 
-      - name: Export generated v10 sources
+      - name: Apply v11 instant recommendations and overlay alignment
+        run: |
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v11/OverlayService.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v11/AccessibilityBoardStore.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/AccessibilityBoardStore.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v11/BerserkEngine.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BerserkEngine.kt
+          python3 - <<'PY'
+          from pathlib import Path
+
+          acc=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessAccessibilityService.kt')
+          s=acc.read_text()
+          s=s.replace('notificationTimeout = 60', 'notificationTimeout = 35')
+          s=s.replace('        }, 100)\n', '        }, 45)\n', 1)
+          acc.write_text(s)
+
+          g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
+          gs=g.read_text().replace('versionCode = 10', 'versionCode = 11').replace('versionName = "0.10.0"', 'versionName = "0.11.0"')
+          g.write_text(gs)
+          PY
+
+      - name: Export generated v11 sources
         uses: actions/upload-artifact@v4
         with:
-          name: v10-generated-sources
+          name: v11-generated-sources
           path: |
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessAccessibilityService.kt
@@ -269,7 +288,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v10-accessibility-fix-APK
+          name: Chess22kOverlay-v11-instant-aligned-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
