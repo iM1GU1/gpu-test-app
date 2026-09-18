@@ -145,6 +145,17 @@ jobs:
           cp /tmp/v5patches/MainActivity.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
           cp /tmp/v5patches/activity_main.xml /tmp/chess-overlay/BerserkOverlay/app/src/main/res/layout/activity_main.xml
 
+      - name: Upload v5 source patches for diagnosis
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-source-patches
+          path: /tmp/v5patches
+          retention-days: 1
+
+      - name: Re-enter v5 AI patch setup
+        run: |
+          true
+
           # Keep the v4 arrow renderer and fresh-frame generation counter.
           cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v4/BoardOverlayView.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt
           cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v4/ProjectionStore.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ProjectionStore.kt
