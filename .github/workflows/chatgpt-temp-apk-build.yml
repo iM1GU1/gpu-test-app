@@ -1,0 +1,117 @@
+name: Temporary Chess22k APK Build
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout isolated build branch
+        uses: actions/checkout@v4
+        with:
+          ref: chatgpt/chess-overlay-build
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Reconstruct Android project
+        run: |
+          cat chatgpt-build/project.b64.part* | base64 -d > /tmp/chess-overlay.zip
+          unzip -t /tmp/chess-overlay.zip
+          rm -rf /tmp/chess-overlay
+          mkdir -p /tmp/chess-overlay
+          unzip -q /tmp/chess-overlay.zip -d /tmp/chess-overlay
+
+      - name: Add chess22k source
+        run: |
+          git clone --depth 1 https://github.com/sandermvdb/chess22k.git /tmp/chess22k
+          cp -R /tmp/chess22k/src/main/java/nl /tmp/chess-overlay/BerserkOverlay/app/src/main/java/
+          mkdir -p /tmp/chess-overlay/BerserkOverlay/app/src/main/assets
+          if [ -f /tmp/chess22k/LICENSE ]; then
+            cp /tmp/chess22k/LICENSE /tmp/chess-overlay/BerserkOverlay/app/src/main/assets/chess22k-GPL-3.0.txt
+          fi
+          printf '%s\n' 'chess22k upstream: https://github.com/sandermvdb/chess22k'             'Bundled under GPL-3.0. Source is available at the upstream URL above.'             > /tmp/chess-overlay/BerserkOverlay/app/src/main/assets/chess22k-source.txt
+
+      - name: Patch engine for alternatives and Java 17
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/java/nl/s22k/chess/search/NegamaxUtil.java')
+          s=p.read_text()
+          needle='public static boolean isRunning = false;'
+          addition='''public static boolean isRunning = false;
+
+          private static volatile int[] ROOT_EXCLUDED_MOVES = new int[0];
+
+          public static void setRootExcludedMoves(final int[] moves) {
+              ROOT_EXCLUDED_MOVES = moves == null ? new int[0] : moves.clone();
+          }
+
+          private static boolean isRootMoveExcluded(final int move) {
+              for (int excluded : ROOT_EXCLUDED_MOVES) {
+                  if (excluded == move) return true;
+              }
+              return false;
+          }'''
+          if needle not in s: raise SystemExit('isRunning insertion point not found')
+          s=s.replace(needle, addition, 1)
+          needle2='final int move = threadData.next();'
+          repl2='''final int move = threadData.next();
+
+                  if (ply == 0 && isRootMoveExcluded(move)) {
+                      continue;
+                  }'''
+          if needle2 not in s: raise SystemExit('move insertion point not found')
+          s=s.replace(needle2, repl2, 1)
+          p.write_text(s)
+
+          g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
+          gs=g.read_text()
+          insert='''
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          '''
+          pos=gs.rfind('\n}')
+          if pos < 0: raise SystemExit('android block not found')
+          # first closing brace before dependencies is the android block in this small file
+          dep=gs.find('\n\ndependencies')
+          pos=gs.rfind('\n}',0,dep)
+          gs=gs[:pos]+insert+gs[pos:]
+          g.write_text(gs)
+          PY
+
+      - name: Build debug APK
+        working-directory: /tmp/chess-overlay/BerserkOverlay
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Collect APK
+        run: |
+          cp /tmp/chess-overlay/BerserkOverlay/app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/Chess22kOverlay.apk"
+          sha256sum "$GITHUB_WORKSPACE/Chess22kOverlay.apk"
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chess22kOverlay-APK
+          path: Chess22kOverlay.apk
+          if-no-files-found: error
+          retention-days: 7
