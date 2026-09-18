@@ -23,6 +23,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Python for AI model conversion
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -128,29 +133,72 @@ jobs:
           g.write_text(gs)
           PY
 
-      - name: Apply v4 recognition, fresh-frame and arrow fixes
+      - name: Apply v5 AI auto-detection overlay
         run: |
-          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v4/OverlayService.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
-          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v4/BoardRecognizer.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardRecognizer.kt
+          cat "$GITHUB_WORKSPACE"/chatgpt-build/v5patches.b64.part* | base64 -d > /tmp/v5patches.zip
+          rm -rf /tmp/v5patches
+          mkdir -p /tmp/v5patches
+          unzip -q /tmp/v5patches.zip -d /tmp/v5patches
+
+          cp /tmp/v5patches/AiBoardRecognizer.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/AiBoardRecognizer.kt
+          cp /tmp/v5patches/OverlayService.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
+          cp /tmp/v5patches/MainActivity.kt /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
+          cp /tmp/v5patches/activity_main.xml /tmp/chess-overlay/BerserkOverlay/app/src/main/res/layout/activity_main.xml
+
+          # Keep the v4 arrow renderer and fresh-frame generation counter.
           cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v4/BoardOverlayView.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt
           cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v4/ProjectionStore.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ProjectionStore.kt
-          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v4/activity_main.xml" /tmp/chess-overlay/BerserkOverlay/app/src/main/res/layout/activity_main.xml
+
           python3 - <<'PY'
           from pathlib import Path
-
           styles=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/res/values/styles.xml')
-          s=styles.read_text()
-          s=s.replace('parent="android:style/Theme.Material.Light.NoActionBar"', 'parent="Theme.AppCompat.Light.NoActionBar"')
+          s=styles.read_text().replace(
+              'parent="android:style/Theme.Material.Light.NoActionBar"',
+              'parent="Theme.AppCompat.Light.NoActionBar"'
+          )
           styles.write_text(s)
 
           manifest=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/AndroidManifest.xml')
-          m=manifest.read_text().replace('android:label="Berserk Overlay"', 'android:label="Chess22k Overlay"')
+          m=manifest.read_text().replace('android:label="Berserk Overlay"', 'android:label="Chess22k AI Overlay"')
           manifest.write_text(m)
 
           gradle=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
-          g=gradle.read_text().replace('versionCode = 1', 'versionCode = 4').replace('versionName = "0.1.0"', 'versionName = "0.4.0"')
+          g=gradle.read_text()
+          g=g.replace('versionCode = 1', 'versionCode = 5')
+          g=g.replace('versionName = "0.1.0"', 'versionName = "0.5.0"')
+          if 'org.tensorflow:tensorflow-lite' not in g:
+              g=g.replace(
+                  'dependencies {',
+                  'dependencies {\n    implementation("org.tensorflow:tensorflow-lite:2.17.0")'
+              )
           gradle.write_text(g)
           PY
+
+      - name: Convert pretrained chess CNN to TensorFlow Lite
+        run: |
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet tensorflow-cpu==2.15.1
+          curl -L --fail --retry 3             https://github.com/linrock/chessboard-recognizer/releases/download/v0.5/nn.zip             -o /tmp/chess-nn.zip
+          rm -rf /tmp/chess-nn
+          mkdir -p /tmp/chess-nn
+          unzip -q /tmp/chess-nn.zip -d /tmp/chess-nn
+          mkdir -p /tmp/chess-overlay/BerserkOverlay/app/src/main/assets
+          python3 - <<'PY'
+          from pathlib import Path
+          import tensorflow as tf
+
+          roots=list(Path('/tmp/chess-nn').glob('**/model.tf'))
+          if not roots:
+              raise SystemExit('model.tf not found in nn.zip')
+          model_path=roots[0]
+          converter=tf.lite.TFLiteConverter.from_saved_model(str(model_path))
+          tflite_model=converter.convert()
+          out=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/assets/chess_piece_classifier.tflite')
+          out.write_bytes(tflite_model)
+          print('TFLite model bytes:', out.stat().st_size)
+          PY
+          curl -L --fail             https://raw.githubusercontent.com/linrock/chessboard-recognizer/master/LICENSE             -o /tmp/chess-overlay/BerserkOverlay/app/src/main/assets/chessboard-recognizer-MIT.txt
+          printf '%s\n'             'Piece classifier derived from linrock/chessboard-recognizer v0.5 (MIT).'             'Source: https://github.com/linrock/chessboard-recognizer'             > /tmp/chess-overlay/BerserkOverlay/app/src/main/assets/chess-ai-source.txt
 
       - name: Build debug APK
         working-directory: /tmp/chess-overlay/BerserkOverlay
@@ -164,7 +212,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v4-detection-arrows-APK
+          name: Chess22kOverlay-v5-AI-auto-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
