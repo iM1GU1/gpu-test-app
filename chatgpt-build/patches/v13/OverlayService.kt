@@ -397,6 +397,149 @@ class OverlayService : Service() {
         }
     }
 
+    private fun processStablePosition(snapshot: AccessibilityBoardStore.Snapshot, generation: Long) {
+        val previous = lastStableSnapshot
+        val previousTurn = autoTurnWhite
+
+        autoTurnWhite = when {
+            isInitialPosition(snapshot) -> true
+            previous != null -> {
+                inferMoverWhite(previous, snapshot)?.let { !it }
+                    ?: if (plausibleSingleMove(previous, snapshot) && previousTurn != null) !previousTurn
+                    else previousTurn
+            }
+            else -> previousTurn
+        }
+
+        lastStableSnapshot = snapshot
+        cancelPendingEngineWork(false)
+        worker.execute { precomputePrimary(snapshot, generation) }
+    }
+
+    private fun inferMoverWhite(
+        before: AccessibilityBoardStore.Snapshot,
+        after: AccessibilityBoardStore.Snapshot
+    ): Boolean? {
+        var whiteRemoved = 0
+        var whiteAdded = 0
+        var blackRemoved = 0
+        var blackAdded = 0
+        var changed = 0
+
+        for (rank in 1..8) for (file in 'a'..'h') {
+            val sq = "$file$rank"
+            val oldPiece = before.pieces[sq] ?: '.'
+            val newPiece = after.pieces[sq] ?: '.'
+            if (oldPiece == newPiece) continue
+            changed++
+
+            if (oldPiece != '.') {
+                if (oldPiece.isUpperCase()) whiteRemoved++ else blackRemoved++
+            }
+            if (newPiece != '.') {
+                if (newPiece.isUpperCase()) whiteAdded++ else blackAdded++
+            }
+        }
+
+        if (changed !in 2..6) return null
+        val whiteCandidate = whiteRemoved >= 1 && whiteAdded >= 1
+        val blackCandidate = blackRemoved >= 1 && blackAdded >= 1
+        return when {
+            whiteCandidate && !blackCandidate -> true
+            blackCandidate && !whiteCandidate -> false
+            else -> null
+        }
+    }
+
+    private fun plausibleSingleMove(
+        before: AccessibilityBoardStore.Snapshot,
+        after: AccessibilityBoardStore.Snapshot
+    ): Boolean {
+        var changed = 0
+        for (rank in 1..8) for (file in 'a'..'h') {
+            val sq = "$file$rank"
+            if ((before.pieces[sq] ?: '.') != (after.pieces[sq] ?: '.')) changed++
+        }
+        return changed in 2..6
+    }
+
+    private fun isInitialPosition(snapshot: AccessibilityBoardStore.Snapshot): Boolean {
+        if (snapshot.pieceCount != 32) return false
+        val p = snapshot.pieces
+        if (p["e1"] != 'K' || p["e8"] != 'k') return false
+        for (file in 'a'..'h') {
+            if (p["$file" + "2"] != 'P' || p["$file" + "7"] != 'p') return false
+        }
+        return true
+    }
+
+    private fun guardedAnalyse(
+        fen: String,
+        multiPv: Int,
+        moveTimeMs: Int,
+        timeoutMs: Long,
+        notifyOnTimeout: Boolean
+    ): List<AnalysisLine>? {
+        val id = searchSeq.incrementAndGet()
+        activeSearchId = id
+
+        main.postDelayed({
+            if (activeSearchId == id) {
+                engine.abortSearch()
+                worker.queue.clear()
+                refineKeyInFlight = null
+                if (notifyOnTimeout) {
+                    showStatus("Motor lento · recuperando…", 1100)
+                }
+            }
+        }, timeoutMs)
+
+        return try {
+            runCatching { engine.analyse(fen, multiPv, moveTimeMs) }.getOrNull()
+        } finally {
+            if (activeSearchId == id) activeSearchId = 0L
+        }
+    }
+
+    private fun cancelPendingEngineWork(showMessage: Boolean) {
+        activeSearchId = 0L
+        engine.abortSearch()
+        worker.queue.clear()
+        refineKeyInFlight = null
+        if (showMessage) showStatus("↻ Cancelando cálculo anterior…", 650)
+    }
+
+    private fun hardReset() {
+        showStatus("↻ Reiniciando motor y tablero…", 0)
+        requestToken++
+        cancelPendingEngineWork(false)
+        synchronized(cacheLock) { primaryCache.clear() }
+        resultView.setAnalysis(emptyList())
+
+        seenGeneration = -1L
+        processedGeneration = -1L
+        stableSinceMs = 0L
+        lastStableSnapshot = null
+        autoTurnWhite = null
+        lastPrefetchGeneration = -1L
+
+        val old = worker
+        old.queue.clear()
+        old.shutdownNow()
+        worker = newWorker()
+
+        AccessibilityBoardStore.clearSnapshot("Reset manual · leyendo tablero de nuevo…")
+        runCatching { ChessAccessibilityService.current()?.readBoardNow() }
+
+        worker.execute {
+            runCatching { engine.resetState() }
+            runCatching { engine.warmUp() }
+            main.post {
+                if (!destroyed) showStatus("✓ Reset completado", 900)
+            }
+        }
+    }
+
     private fun applySnapshotGeometry(snapshot: AccessibilityBoardStore.Snapshot) {
         val rect = RectF(snapshot.boardRect)
         val location = IntArray(2)
