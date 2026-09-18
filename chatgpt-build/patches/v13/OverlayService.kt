@@ -272,6 +272,7 @@ class OverlayService : Service() {
     }
 
     private fun analysePosition(whiteToMove: Boolean) {
+        autoTurnWhite = whiteToMove
         val service = ChessAccessibilityService.current()
         if (service == null || !AccessibilityBoardStore.isConnected()) {
             showStatus("Accesibilidad no está conectada. Actívala y vuelve al tablero.", 4500)
@@ -300,9 +301,10 @@ class OverlayService : Service() {
         }
 
         showStatus(if (whiteToMove) "BLANCAS · cálculo rápido…" else "NEGRAS · cálculo rápido…", 0)
+        cancelPendingEngineWork(false)
         worker.execute {
             val fen = ChessFen.fromPieces(snapshot.pieces, whiteToMove)
-            val fast = runCatching { engine.analyse(fen, 1, 75).firstOrNull() }.getOrNull()
+            val fast = guardedAnalyse(fen, 1, 65, 700L, true)?.firstOrNull()
             if (fast != null) putPrimary(key, fast)
 
             main.post {
@@ -338,7 +340,7 @@ class OverlayService : Service() {
         worker.execute {
             try {
                 val fen = ChessFen.fromPieces(snapshot.pieces, whiteToMove)
-                val lines = runCatching { engine.analyse(fen, multipv, 135) }.getOrNull()
+                val lines = guardedAnalyse(fen, multipv, 115, 950L, false)
                 if (!lines.isNullOrEmpty()) {
                     lines.firstOrNull()?.let { putPrimary(key, it) }
                     main.post {
@@ -358,15 +360,39 @@ class OverlayService : Service() {
     }
 
     private fun precomputePrimary(snapshot: AccessibilityBoardStore.Snapshot, generation: Long) {
-        for (whiteToMove in listOf(true, false)) {
+        val preferred = autoTurnWhite
+        val order = if (preferred == null) listOf(true, false) else listOf(preferred, !preferred)
+
+        for (whiteToMove in order) {
             if (destroyed || AccessibilityBoardStore.generation() != generation) return
             val key = positionKey(snapshot, whiteToMove)
-            if (getPrimary(key) != null) continue
+            var line = getPrimary(key)
 
-            val fen = ChessFen.fromPieces(snapshot.pieces, whiteToMove)
-            val line = runCatching { engine.analyse(fen, 1, 105).firstOrNull() }.getOrNull()
-            if (line != null && AccessibilityBoardStore.generation() == generation) {
-                putPrimary(key, line)
+            if (line == null) {
+                val fen = ChessFen.fromPieces(snapshot.pieces, whiteToMove)
+                line = guardedAnalyse(fen, 1, 85, 700L, false)?.firstOrNull()
+                if (line != null && AccessibilityBoardStore.generation() == generation) {
+                    putPrimary(key, line)
+                }
+            }
+
+            if (line != null &&
+                AccessibilityBoardStore.generation() == generation &&
+                autoTurnWhite == whiteToMove
+            ) {
+                val autoLine = line
+                main.post {
+                    if (AccessibilityBoardStore.generation() == generation &&
+                        autoTurnWhite == whiteToMove
+                    ) {
+                        applySnapshotGeometry(snapshot)
+                        resultView.setAnalysis(listOf(autoLine))
+                        showStatus(
+                            "AUTO " + (if (whiteToMove) "♔" else "♚") + " · " + autoLine.move,
+                            650
+                        )
+                    }
+                }
             }
         }
     }
