@@ -189,6 +189,10 @@ jobs:
         run: |
           python3 "$GITHUB_WORKSPACE/chatgpt-build/patch_capture_fallback.py"             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt             /tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts
 
+      - name: Fix overlay arrow redraw
+        run: |
+          python3 "$GITHUB_WORKSPACE/chatgpt-build/patch_arrow_redraw.py"             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt             /tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts
+
       - name: Convert pretrained chess CNN to TensorFlow Lite
         run: |
           python3 -m pip install --quiet --upgrade pip
@@ -227,7 +231,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v6-capture-fix-APK
+          name: Chess22kOverlay-v7-arrow-fix-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
