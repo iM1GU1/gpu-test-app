@@ -67,6 +67,8 @@ class OverlayService : Service() {
     @Volatile private var visionScanInFlight = false
     private var lastVisualFailureShownAt = 0L
     private var visualFailureStreak = 0
+    private var lastScreenshotAttemptAt = 0L
+    private var screenshotRetryScheduled = false
 
     private fun newWorker() = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue()
@@ -106,7 +108,7 @@ class OverlayService : Service() {
             val visualNeeded = prefs.getBoolean("vision_manual", false) ||
                 AccessibilityBoardStore.snapshot() == null ||
                 AccessibilityBoardStore.ageMs() > 1600L
-            if (visualNeeded && now - lastVisionScanAt > 650L && !visionScanInFlight) {
+            if (visualNeeded && now - lastVisionScanAt > 1250L && !visionScanInFlight) {
                 lastVisionScanAt = now
                 requestVisionScan(showErrors = false)
             }
@@ -365,6 +367,25 @@ class OverlayService : Service() {
 
     private fun requestVisionScan(showErrors: Boolean) {
         if (visionScanInFlight || destroyed || !::visionReader.isInitialized) return
+
+        // AccessibilityService.takeScreenshot() is rate-limited by Android.
+        // Error code 3 means the previous screenshot was taken too recently.
+        // Keep a safety margin above one second so FIDE/World Chess can be
+        // scanned continuously without falling into a permanent error-3 loop.
+        val now = android.os.SystemClock.elapsedRealtime()
+        val minInterval = 1150L
+        val remaining = minInterval - (now - lastScreenshotAttemptAt)
+        if (remaining > 0L) {
+            if (!screenshotRetryScheduled) {
+                screenshotRetryScheduled = true
+                main.postDelayed({
+                    screenshotRetryScheduled = false
+                    requestVisionScan(showErrors)
+                }, remaining + 80L)
+            }
+            return
+        }
+        lastScreenshotAttemptAt = now
         val service = ChessAccessibilityService.current()
         if (service == null || !AccessibilityBoardStore.isConnected()) {
             if (showErrors) showStatus("Activa Accesibilidad para usar detección visual", 2200)
@@ -456,8 +477,24 @@ class OverlayService : Service() {
 
                         override fun onFailure(errorCode: Int) {
                             visionScanInFlight = false
+                            lastVisionScanAt = android.os.SystemClock.elapsedRealtime()
+
+                            if (errorCode == AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
+                                // Normal rate-limit condition: retry after the cooldown instead
+                                // of presenting it as an unavailable-capture failure.
+                                if (!screenshotRetryScheduled) {
+                                    screenshotRetryScheduled = true
+                                    main.postDelayed({
+                                        screenshotRetryScheduled = false
+                                        requestVisionScan(showErrors = false)
+                                    }, 1250L)
+                                }
+                                if (showErrors) showStatus("Captura visual · reintentando…", 700)
+                                return
+                            }
+
                             if (showErrors || AccessibilityBoardStore.snapshot() == null) {
-                                showStatus("Captura visual no disponible (código $errorCode) · usa Accesibilidad semántica si el sitio la permite", 2600)
+                                showStatus("Captura visual no disponible (código $errorCode)", 2200)
                             }
                         }
                     }
