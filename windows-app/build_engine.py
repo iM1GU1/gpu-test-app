@@ -31,7 +31,7 @@ args = root/'build/javac-args.txt'
 args.write_text('\n'.join('"'+str(p).replace('\\','/')+'"' for p in sources),encoding='utf-8')
 subprocess.run(['javac','--release','17','-encoding','UTF-8','-d',str(classes),'@'+str(args)],check=True)
 out = root/'engine'; out.mkdir(exist_ok=True)
-subprocess.run(['jar','--create','--file',str(out/'chess22k-overlay.jar'),'--main-class','OverlayBridge','-C',str(classes),'.'],check=True)
+subprocess.run(['jar','--create','--file',str(out/'chess22k-overlay.jar'),'--main-class','nl.s22k.chess.desktop.OverlayBridge','-C',str(classes),'.'],check=True)
 licenses = root/'licenses'; licenses.mkdir(exist_ok=True)
 shutil.copy(engine/'LICENSE', licenses/'chess22k-GPL-3.0.txt')
 source_out = root/'engine-source'; source_out.mkdir(exist_ok=True)

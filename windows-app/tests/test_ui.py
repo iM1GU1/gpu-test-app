@@ -62,9 +62,11 @@ class UiStateTests(unittest.TestCase):
         self.assertFalse(self.window.arrows.moves)
 
     def test_reset_forgets_previous_site(self):
+        self.window.turn = chess.BLACK
         self.window.reset()
         self.assertIsNone(self.window.tracker.board)
         self.assertFalse(self.window.arrows.moves)
+        self.assertEqual(self.window.turn, chess.WHITE)
 
 
 if __name__ == '__main__':

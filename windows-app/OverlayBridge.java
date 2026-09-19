@@ -1,3 +1,5 @@
+package nl.s22k.chess.desktop;
+
 import java.util.*;
 import nl.s22k.chess.*;
 import nl.s22k.chess.engine.*;

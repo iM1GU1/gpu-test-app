@@ -93,13 +93,17 @@ jobs:
             windows-app/Chess22kOverlay-Windows11-x64-v0.1.0.sha256
           if-no-files-found: error
           retention-days: 30
+      - name: Collect build diagnostics
+        if: always()
+        run: |
+          New-Item -ItemType Directory -Force build-diagnostics | Out-Null
+          if (Test-Path self-test-result.json) { Copy-Item self-test-result.json build-diagnostics/source-test.json }
+          if (Test-Path dist/Chess22kOverlay/self-test-result.json) { Copy-Item dist/Chess22kOverlay/self-test-result.json build-diagnostics/packaged-test.json }
+          if (Test-Path dist/Chess22kOverlay/self-test-window.png) { Copy-Item dist/Chess22kOverlay/self-test-window.png build-diagnostics/window.png }
+          if (Test-Path "$env:LOCALAPPDATA/Chess22kOverlay/overlay.log") { Copy-Item "$env:LOCALAPPDATA/Chess22kOverlay/overlay.log" build-diagnostics/overlay.log }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: windows-build-diagnostics
-          path: |
-            windows-app/self-test-result.json
-            windows-app/dist/Chess22kOverlay/self-test-result.json
-            windows-app/dist/Chess22kOverlay/self-test-window.png
-            ~/AppData/Local/Chess22kOverlay/overlay.log
+          path: windows-app/build-diagnostics
           retention-days: 7

@@ -238,6 +238,7 @@ class Window(QWidget):
 
     def reset(self):
         self.generation += 1
+        self.turn = chess.WHITE
         self.tracker = StablePosition(); self.analysis_key = None
         self.last_lines = []; self.last_display_board = None; self.manual_mode = False
         self.last_valid_at = 0
