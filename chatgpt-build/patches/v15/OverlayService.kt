@@ -66,6 +66,7 @@ class OverlayService : Service() {
     private var lastVisionScanAt = 0L
     @Volatile private var visionScanInFlight = false
     private var lastVisualFailureShownAt = 0L
+    private var visualFailureStreak = 0
 
     private fun newWorker() = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue()
@@ -405,6 +406,7 @@ class OverlayService : Service() {
                                     visionScanInFlight = false
 
                                     if (detection != null && visionReader.isValid(detection)) {
+                                        visualFailureStreak = 0
                                         val snap = AccessibilityBoardStore.Snapshot(
                                             pieces = detection.pieces,
                                             boardRect = RectF(detection.boardRect),
@@ -434,6 +436,11 @@ class OverlayService : Service() {
                                             AccessibilityBoardStore.clearSnapshot(msg)
                                         } else {
                                             AccessibilityBoardStore.updateDiagnostic(msg)
+                                        }
+                                        visualFailureStreak++
+                                        if (visualFailureStreak >= 2 && ::resultView.isInitialized) {
+                                            // A persistent invalid visual read means the old arrow is no longer trustworthy.
+                                            resultView.setAnalysis(emptyList())
                                         }
                                         val now = android.os.SystemClock.elapsedRealtime()
                                         if (showErrors || AccessibilityBoardStore.snapshot() == null) {
