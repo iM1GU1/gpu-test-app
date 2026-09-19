@@ -276,7 +276,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
-          s=g.read_text().replace('versionCode = 14', 'versionCode = 15').replace('versionName = "0.14.0"', 'versionName = "0.15.0"')
+          s=g.read_text().replace('versionCode = 14', 'versionCode = 16').replace('versionName = "0.14.0"', 'versionName = "0.15.1"')
           g.write_text(s)
 
           cfg=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/res/xml/accessibility_service_config.xml')
