@@ -79,7 +79,8 @@ class OverlayService : Service() {
             if (generation > 0L && generation != seenGeneration) {
                 seenGeneration = generation
                 stableSinceMs = now
-                if (::resultView.isInitialized) resultView.setAnalysis(emptyList())
+                // Keep the previous arrow visible while the new position is stabilising/analyzing.
+                // Clearing it here caused a visible blink on every board update.
                 cancelPendingEngineWork(false)
             }
 
@@ -373,9 +374,9 @@ class OverlayService : Service() {
         }
 
         visionScanInFlight = true
-        val previousStatusVisible = ::statusView.isInitialized && statusView.visibility == View.VISIBLE
-        setCaptureUiVisible(false)
-
+        // Do not hide the overlay before screenshots. Hiding/restoring the full-screen
+        // overlay and button panel on every visual scan caused periodic UI flicker.
+        // VisionBoardReader validates several frames/board constraints, so we keep UI stable.
         main.postDelayed({
             try {
                 service.takeScreenshot(
@@ -391,8 +392,6 @@ class OverlayService : Service() {
 
                             if (bitmap == null) {
                                 visionScanInFlight = false
-                                setCaptureUiVisible(true)
-                                if (!previousStatusVisible) statusView.visibility = View.GONE
                                 if (showErrors) showStatus("No se pudo leer la captura visual", 2200)
                                 return
                             }
@@ -403,8 +402,6 @@ class OverlayService : Service() {
                                 bitmap.recycle()
                                 main.post {
                                     visionScanInFlight = false
-                                    setCaptureUiVisible(true)
-                                    if (!previousStatusVisible) statusView.visibility = View.GONE
 
                                     if (detection != null && visionReader.isValid(detection)) {
                                         val snap = AccessibilityBoardStore.Snapshot(
@@ -441,8 +438,6 @@ class OverlayService : Service() {
 
                         override fun onFailure(errorCode: Int) {
                             visionScanInFlight = false
-                            setCaptureUiVisible(true)
-                            if (!previousStatusVisible) statusView.visibility = View.GONE
                             if (showErrors || AccessibilityBoardStore.snapshot() == null) {
                                 showStatus("Captura visual no disponible (código $errorCode) · usa Accesibilidad semántica si el sitio la permite", 2600)
                             }
@@ -451,8 +446,6 @@ class OverlayService : Service() {
                 )
             } catch (t: Throwable) {
                 visionScanInFlight = false
-                setCaptureUiVisible(true)
-                if (!previousStatusVisible) statusView.visibility = View.GONE
                 if (showErrors) showStatus("Error de captura visual: ${t.message ?: "desconocido"}", 2600)
             }
         }, 90L)
