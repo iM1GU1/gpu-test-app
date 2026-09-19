@@ -1,0 +1,104 @@
+name: Build Chess22k Overlay Windows x64
+
+on:
+  push:
+    branches: [chatgpt/chess-overlay-windows]
+    paths: ['windows-app/**', '.github/workflows/chess22k-windows.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install conversion dependencies
+        run: python -m pip install tensorflow-cpu==2.15.1 tf2onnx==1.16.1 onnx==1.16.2 onnxruntime==1.20.1 numpy==1.26.4
+      - name: Convert same pretrained model and verify numerical equivalence
+        run: python windows-app/convert_model.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-classifier
+          path: |
+            windows-app/models
+            windows-app/licenses
+          retention-days: 7
+  windows:
+    needs: model
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: windows-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          architecture: x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-classifier
+          path: windows-app
+      - name: Install Windows dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test board state and recognition safeguards
+        run: python -m unittest discover -s tests -v
+      - name: Build original chess22k and minimal Java runtime
+        run: |
+          python build_engine.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          jlink --add-modules java.base --strip-debug --no-header-files --no-man-pages --compress=2 --output runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify source application and engine
+        run: |
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          python app.py --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package portable EXE
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name Chess22kOverlay --collect-all onnxruntime --hidden-import uiautomation --hidden-import comtypes.stream app.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python package_windows.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify actual packaged EXE
+        run: |
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $p = Start-Process -FilePath '.\dist\Chess22kOverlay\Chess22kOverlay.exe' -ArgumentList '--self-test' -PassThru
+          if (-not $p.WaitForExit(90000)) { $p.Kill(); throw 'Packaged EXE test timed out' }
+          if ($p.ExitCode -ne 0) { throw "Packaged EXE failed: $($p.ExitCode)" }
+          if (-not (Test-Path '.\dist\Chess22kOverlay\self-test-result.json')) { throw 'Missing self-test result' }
+          Get-Content '.\dist\Chess22kOverlay\self-test-result.json'
+      - name: ZIP and checksum
+        run: |
+          python package_windows.py --zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash 'Chess22kOverlay-Windows11-x64-v0.1.0.zip' -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Chess22kOverlay-Windows11-x64-v0.1.0
+          path: |
+            windows-app/Chess22kOverlay-Windows11-x64-v0.1.0.zip
+            windows-app/Chess22kOverlay-Windows11-x64-v0.1.0.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-build-diagnostics
+          path: |
+            windows-app/self-test-result.json
+            windows-app/dist/Chess22kOverlay/self-test-result.json
+            ~/AppData/Local/Chess22kOverlay/overlay.log
+          retention-days: 7

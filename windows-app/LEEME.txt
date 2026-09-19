@@ -1,0 +1,69 @@
+CHESS22K OVERLAY PARA WINDOWS 11 x64 — 0.1.0
+Adaptación de Android v15.1. No modifica ni reemplaza la APK.
+
+INICIO
+1. Extrae TODO el ZIP en una carpeta. No abras el EXE dentro del ZIP.
+2. Abre Chess22kOverlay.exe. No requiere instalar Python ni Java ni usar administrador.
+3. Abre un tablero 2D en tu navegador y déjalo completamente visible.
+4. Pulsa Seleccionar tablero y arrastra desde una esquina a la opuesta,
+   incluyendo exactamente las 64 casillas, sin marcos ni coordenadas exteriores.
+   También puedes probar Detectar automáticamente.
+5. Elige Blancas abajo o Negras abajo, indica de quién es el turno y pulsa Iniciar.
+   El turno se actualiza siguiendo los movimientos legales que se reconocen.
+6. Si cambias de web, partida, monitor, zoom o tamaño, pulsa Reiniciar y vuelve
+   a seleccionar el tablero. Las flechas no interceptan clics del ratón.
+
+FUNCIONES
+- Motor chess22k 1.14 incluido, con 1 o 3 recomendaciones y evaluación.
+- Perfiles Preciso, Universal elite, Posicional elite y Táctico elite.
+- Captura local, clasificador derivado del mismo modelo v0.5 que usa Android.
+- Lectura híbrida: Accesibilidad Windows cuando expone las 64 casillas con
+  piezas/colores; si no, reconocimiento visual. No modifica el navegador.
+- Ventana superpuesta excluida de la captura mediante la API de Windows:
+  no se oculta y reaparece en cada lectura. Si esa API falla, no inicia captura.
+- Selección manual y búsqueda automática del tablero.
+- Validación de exactamente un rey de cada color, recuperación de la posición
+  inicial FIDE y corrección temporal mediante sucesores legales.
+- Dos lecturas coincidentes para aceptar; tres inválidas o cuatro segundos sin
+  validación borran las flechas. No reutiliza un árbol de accesibilidad antiguo.
+- Importar FEN permite analizar una posición exacta sin depender de la visión.
+
+LIMITACIONES IMPORTANTES
+- Esta es la primera adaptación Windows, no una garantía de reconocimiento
+  perfecto de cualquier tema de piezas. FIDE/World Chess necesita prueba real.
+- Accesibilidad Android y takeScreenshot no existen en Windows: sus funciones
+  se han adaptado a UI Automation y captura de escritorio. El error Android 3
+  no es aplicable. La lectura está espaciada 1,2 s y no se solapa.
+- Selecciona en un solo monitor. El cambio de DPI/zoom/monitor requiere reselección.
+- Si empiezas a mitad de partida, la imagen no demuestra derechos de enroque
+  ni captura al paso: se omiten conservadoramente. Importa FEN para conservarlos.
+- Si se saltan varias jugadas, no se inventa una secuencia: Reiniciar permite
+  adquirir la posición nueva; vuelve a indicar el turno correcto.
+- El programa no mueve piezas automáticamente ni conecta con tu cuenta.
+- El EXE no está firmado con un certificado comercial. No desactives el antivirus;
+  verifica origen y hash si Windows presenta una advertencia.
+- Úsalo para estudio/entrenamiento o donde la asistencia esté permitida.
+
+PRIVACIDAD Y DIAGNÓSTICO
+Las capturas se procesan en memoria. No se guardan ni se suben a Internet.
+Los errores van a %LOCALAPPDATA%\Chess22kOverlay\overlay.log, sin capturas.
+Pausar detiene nuevas lecturas y elimina las recomendaciones.
+
+CÓDIGO Y LICENCIAS
+La carpeta source contiene el código de esta adaptación y scripts de compilación.
+engine-source contiene el código correspondiente de chess22k con el parche
+de exclusión de movimientos, además del adaptador Java.
+Las licencias y avisos están en licenses; el runtime Java incluye sus avisos
+en runtime/legal. El código nuevo de la adaptación se ofrece bajo GPL-3.0-or-later.
+Base Android: iM1GU1/gpu-test-app, commit 78d63a8c649abc272f545d2f23132a0e368e3e38.
+Motor: sandermvdb/chess22k, commit 189434c09dc917bf27026cbfb01c5ca88eb55319.
+Modelo: https://github.com/linrock/chessboard-recognizer/releases/tag/v0.5.
+
+RECOMPILAR EN WINDOWS x64
+Instala Python 3.11 y JDK 17. En la carpeta source:
+  python -m pip install -r requirements.txt
+  python build_engine.py
+Convierte el modelo en un entorno separado con TensorFlow 2.15.1,
+tf2onnx 1.16.1, onnx 1.16.2 y numpy 1.26.4 usando convert_model.py.
+Copia models y licenses junto al código. Consulta el workflow incluido para
+los comandos exactos de pruebas, jlink y PyInstaller.
