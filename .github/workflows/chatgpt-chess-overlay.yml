@@ -268,10 +268,28 @@ jobs:
           g.write_text(s)
           PY
 
-      - name: Export generated v14 sources
+      - name: Apply v15 hybrid board detection
+        run: |
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v15/OverlayService.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v15/VisionBoardReader.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/VisionBoardReader.kt
+          cp "$GITHUB_WORKSPACE/chatgpt-build/patches/v15/ManualBoardSelectorView.kt" /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ManualBoardSelectorView.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          g=Path('/tmp/chess-overlay/BerserkOverlay/app/build.gradle.kts')
+          s=g.read_text().replace('versionCode = 14', 'versionCode = 15').replace('versionName = "0.14.0"', 'versionName = "0.15.0"')
+          g.write_text(s)
+
+          cfg=Path('/tmp/chess-overlay/BerserkOverlay/app/src/main/res/xml/accessibility_service_config.xml')
+          x=cfg.read_text()
+          if 'android:canTakeScreenshot=' not in x:
+              x=x.replace('<accessibility-service', '<accessibility-service\n    android:canTakeScreenshot="true"', 1)
+          cfg.write_text(x)
+          PY
+
+      - name: Export generated v15 sources
         uses: actions/upload-artifact@v4
         with:
-          name: v14-generated-sources
+          name: v15-generated-sources
           path: |
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/OverlayService.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ChessAccessibilityService.kt
@@ -281,6 +299,9 @@ jobs:
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/BoardOverlayView.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/MainActivity.kt
             /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/HumanProfile.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/VisionBoardReader.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/java/com/example/berserkoverlay/ManualBoardSelectorView.kt
+            /tmp/chess-overlay/BerserkOverlay/app/src/main/res/xml/accessibility_service_config.xml
           retention-days: 1
 
       - name: Convert pretrained chess CNN to TensorFlow Lite
@@ -321,7 +342,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chess22kOverlay-v14-human-sparring-APK
+          name: Chess22kOverlay-v15-hybrid-board-detection-APK
           path: Chess22kOverlay.apk
           if-no-files-found: error
           retention-days: 7
