@@ -59,7 +59,7 @@ jobs:
         run: |
           python build_engine.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          jlink --add-modules java.base --strip-debug --no-header-files --no-man-pages --compress=2 --output runtime
+          jlink --add-modules java.base,java.logging --strip-debug --no-header-files --no-man-pages --compress=2 --output runtime
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify source application and engine
         run: |
