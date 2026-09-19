@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import chess
 from PIL import Image
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPointF, QRectF
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QFont
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QFont, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QCheckBox, QInputDialog, QMessageBox, QGroupBox)
 
@@ -26,6 +26,18 @@ from vision import Classifier, find_boards
 
 ROOT = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
 VERSION = '0.1.0-windows'
+
+
+def load_system_fonts(app):
+    # Explicit registration also gives the offscreen CI backend real glyphs.
+    # The files remain Windows-owned; no proprietary font is redistributed.
+    if sys.platform == 'win32':
+        folder = Path(os.environ.get('WINDIR', 'C:/Windows'))/'Fonts'
+        for filename in ('segoeui.ttf', 'segoeuib.ttf', 'arial.ttf', 'arialbd.ttf'):
+            path = folder/filename
+            if path.is_file():
+                QFontDatabase.addApplicationFont(str(path))
+    app.setFont(QFont('Segoe UI', 10))
 
 
 def enable_dpi():
@@ -481,6 +493,7 @@ def self_test():
     finally:
         engine.close()
     app = QApplication.instance() or QApplication([])
+    load_system_fonts(app)
     window = Window(); window.show(); app.processEvents()
     window.grab().save(str(ROOT/'self-test-window.png'))
     report['qt_window'] = 'ok'
@@ -503,6 +516,7 @@ def main():
             logging.exception('Self test failed')
             return 1
     app = QApplication(sys.argv)
+    load_system_fonts(app)
     app.setApplicationName('Chess22k Overlay')
     window = Window(); window.show(); exclude_capture(window)
     return app.exec()
