@@ -78,6 +78,7 @@ class VisionBoardReader(context: Context) : AutoCloseable {
 
         repairUniqueKing(top, raw, labels.indexOf('K'), true)
         repairUniqueKing(top, raw, labels.indexOf('k'), false)
+        repairInitialSetup(top)
 
         val whiteAtBottom = inferOrientation(top)
         val pieces = linkedMapOf<String, Char>()
@@ -123,7 +124,7 @@ class VisionBoardReader(context: Context) : AutoCloseable {
                 bestSquare = i
             }
         }
-        if (bestSquare < 0 || raw[bestSquare][kingIndex] < 0.015f) return
+        if (bestSquare < 0) return
 
         for (i in current) {
             if (i == bestSquare) continue
@@ -134,6 +135,41 @@ class VisionBoardReader(context: Context) : AutoCloseable {
             top[i] = alt
         }
         top[bestSquare] = kingIndex
+    }
+
+    private fun repairInitialSetup(top: IntArray) {
+        // FIDE/World Chess outlined pieces are visually quite different from the
+        // model's training set.  At the normal starting position the occupancy
+        // pattern itself is unambiguous, so use it as a safe bootstrap instead
+        // of trusting a wrong top-1 piece label.
+        fun occupied(row: Int): Int = (0..7).count { labels[top[row * 8 + it]] != '1' }
+        val middleOccupied = (2..5).sumOf { occupied(it) }
+        if (occupied(0) < 7 || occupied(1) < 7 || occupied(6) < 7 || occupied(7) < 7 || middleOccupied > 1) return
+
+        val topWhite = (0..15).count { labels[top[it]] in "RNBQKP" }
+        val topBlack = (0..15).count { labels[top[it]] in "rnbqkp" }
+        val bottomWhite = (48..63).count { labels[top[it]] in "RNBQKP" }
+        val bottomBlack = (48..63).count { labels[top[it]] in "rnbqkp" }
+
+        if (topBlack >= topWhite && bottomWhite >= bottomBlack) {
+            val backBlack = "rnbqkbnr"
+            val backWhite = "RNBQKBNR"
+            for (col in 0..7) {
+                top[col] = labels.indexOf(backBlack[col])
+                top[8 + col] = labels.indexOf('p')
+                top[48 + col] = labels.indexOf('P')
+                top[56 + col] = labels.indexOf(backWhite[col])
+            }
+        } else if (topWhite > topBlack && bottomBlack > bottomWhite) {
+            val backWhite = "RNBKQBNR"
+            val backBlack = "rnbkqbnr"
+            for (col in 0..7) {
+                top[col] = labels.indexOf(backWhite[col])
+                top[8 + col] = labels.indexOf('P')
+                top[48 + col] = labels.indexOf('p')
+                top[56 + col] = labels.indexOf(backBlack[col])
+            }
+        }
     }
 
     private fun inferOrientation(top: IntArray): Boolean {
