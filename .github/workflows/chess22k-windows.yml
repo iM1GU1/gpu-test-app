@@ -100,5 +100,6 @@ jobs:
           path: |
             windows-app/self-test-result.json
             windows-app/dist/Chess22kOverlay/self-test-result.json
+            windows-app/dist/Chess22kOverlay/self-test-window.png
             ~/AppData/Local/Chess22kOverlay/overlay.log
           retention-days: 7

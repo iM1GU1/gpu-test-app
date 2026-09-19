@@ -42,7 +42,7 @@ public class OverlayBridge {
                     TimeUtil.setMoveCount(board.moveCounter);
                     TimeUtil.setSimpleTimeWindow(ms * 2L);
                     SearchUtil.start(board);
-                    int move = data.bestMove;
+                    int move = data.getBestMove();
                     if (move == 0 || excluded.contains(move)) break;
                     int score = data.bestScore;
                     String mate = "-";

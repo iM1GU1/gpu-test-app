@@ -175,6 +175,7 @@ class Window(QWidget):
         self.generation = 0
         self.analysis_key = None
         self.last_valid_at = 0
+        self.displayed_at = 0
         self.last_lines = []
         self.last_display_board = None
         self.uia_thread = None
@@ -310,14 +311,14 @@ class Window(QWidget):
             return
         self.stop(); self.reset(); self.scan_busy = True
         self.status.setText('Buscando un tablero 8 × 8 visible…')
-        self.submit('find', self.find_worker)
+        self.submit('find', self.find_worker, self.white_bottom, self.turn)
 
     def get_classifier(self):
         if self.classifier is None:
             self.classifier = Classifier(ROOT/'models/pieces.onnx')
         return self.classifier
 
-    def find_worker(self):
+    def find_worker(self, white_bottom, turn):
         import mss
         classifier = self.get_classifier()
         with mss.mss() as capture:
@@ -326,7 +327,7 @@ class Window(QWidget):
                 image = Image.frombytes('RGB', frame.size, frame.rgb)
                 for x, y, side in find_boards(image):
                     crop = image.crop((x, y, x+side, y+side))
-                    reading = classifier.read(crop, self.white_bottom, None, self.turn)
+                    reading = classifier.read(crop, white_bottom, None, turn)
                     if reading.board is not None:
                         return (x+monitor['left'], y+monitor['top'], side)
         raise RuntimeError('No encontré un tablero fiable. Utiliza Seleccionar tablero.')
@@ -368,9 +369,13 @@ class Window(QWidget):
         if kind == 'engine':
             self.engine_busy = False
         if generation != self.generation:
+            if kind == 'engine' and self.manual_mode:
+                self.analyse()
             return
         if isinstance(payload, Exception):
             self.status.setText(str(payload))
+            if kind == 'engine':
+                self.clear_arrows(); self.analysis_key = None
             if kind == 'scan':
                 if self.tracker.observe(None) == 'clear':
                     self.clear_arrows(); self.analysis_key = None
@@ -397,6 +402,7 @@ class Window(QWidget):
                 return
             self.analysis_key = board.fen()
             self.last_lines, self.last_display_board = lines, board
+            self.displayed_at = time.monotonic()
             self.refresh_moves()
 
     def analyse(self):
@@ -412,7 +418,7 @@ class Window(QWidget):
             return
         if self.tracker.board is None or self.last_display_board.fen() != self.tracker.board.fen():
             return
-        if not self.manual_mode and (not self.running or time.monotonic()-self.last_valid_at > 4):
+        if not self.manual_mode and (not self.running or self.tracker.invalid >= 3 or time.monotonic()-self.last_valid_at > 4):
             return
         lines, board = self.last_lines, self.last_display_board
         if not lines:
@@ -430,6 +436,8 @@ class Window(QWidget):
     def expire(self):
         if self.running and self.last_valid_at and time.monotonic()-self.last_valid_at > 4:
             self.clear_arrows(); self.analysis_key = None
+        if self.running and self.last_display_board and self.tracker.board and self.last_display_board.fen() != self.tracker.board.fen() and time.monotonic()-self.displayed_at > 4:
+            self.clear_arrows()
 
     def import_fen(self):
         text, ok = QInputDialog.getText(self, 'Analizar FEN', 'Pega una posición FEN completa:')
@@ -473,6 +481,7 @@ def self_test():
         engine.close()
     app = QApplication.instance() or QApplication([])
     window = Window(); window.show(); app.processEvents()
+    window.grab().save(str(ROOT/'self-test-window.png'))
     report['qt_window'] = 'ok'
     window.close(); app.processEvents()
     output = ROOT/'self-test-result.json'
