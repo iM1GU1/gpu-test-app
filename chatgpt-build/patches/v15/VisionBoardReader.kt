@@ -23,6 +23,8 @@ class VisionBoardReader(context: Context) : AutoCloseable {
 
     private val labels = charArrayOf('1','R','N','B','Q','K','P','r','n','b','q','k','p')
     private val interpreter: Interpreter
+    private var lastAcceptedPieces: Map<String, Char>? = null
+    private var lastAcceptedWhiteAtBottom: Boolean? = null
 
     init {
         val bytes = context.assets.open("chess_piece_classifier.tflite").use { it.readBytes() }
@@ -76,9 +78,13 @@ class VisionBoardReader(context: Context) : AutoCloseable {
             top[i] = best
         }
 
-        repairUniqueKing(top, raw, labels.indexOf('K'), true)
-        repairUniqueKing(top, raw, labels.indexOf('k'), false)
+        val orientationHint = inferOrientation(top)
+        repairUniqueKing(top, raw, labels.indexOf('K'), true, orientationHint)
+        repairUniqueKing(top, raw, labels.indexOf('k'), false, orientationHint)
         repairInitialSetup(top)
+        // Run again after all heuristics: final output must contain one king of each colour.
+        repairUniqueKing(top, raw, labels.indexOf('K'), true, orientationHint)
+        repairUniqueKing(top, raw, labels.indexOf('k'), false, orientationHint)
 
         val whiteAtBottom = inferOrientation(top)
         val pieces = linkedMapOf<String, Char>()
@@ -96,29 +102,52 @@ class VisionBoardReader(context: Context) : AutoCloseable {
             "Visual ✓ · ${pieces.size} piezas · conf ${(confidence * 100).toInt()}%"
         }
 
+        if (problem == null) {
+            lastAcceptedPieces = LinkedHashMap(pieces)
+            lastAcceptedWhiteAtBottom = whiteAtBottom
+        }
+
         return Detection(
             pieces, rect, whiteAtBottom, pieces.size, confidence, diagnostic
         )
     }
 
-    private fun repairUniqueKing(top: IntArray, raw: Array<FloatArray>, kingIndex: Int, white: Boolean) {
+    private fun repairUniqueKing(
+        top: IntArray,
+        raw: Array<FloatArray>,
+        kingIndex: Int,
+        white: Boolean,
+        whiteAtBottomHint: Boolean
+    ) {
         val current = top.indices.filter { top[it] == kingIndex }
         if (current.size == 1) return
 
-        // World Chess/FIDE Arena uses outlined white pieces.  The old model often
-        // labels the white king as another white piece with high top-1 confidence.
-        // Recover a missing/duplicate king from the king probability, colour and
-        // expected home-side geometry, but keep final position validation strict.
+        val previous = if (lastAcceptedWhiteAtBottom == whiteAtBottomHint) lastAcceptedPieces else null
+        val kingChar = if (white) 'K' else 'k'
         var bestSquare = -1
         var bestScore = Float.NEGATIVE_INFINITY
+
         for (i in 0 until 64) {
             val row = i / 8
+            val col = i % 8
             val predicted = labels[top[i]]
             val sameColour = if (white) predicted in "RNBQKP" else predicted in "rnbqkp"
             val kingP = raw[i][kingIndex]
             val homeBonus = if (white) row / 7f else (7 - row) / 7f
-            val colourBonus = if (sameColour) 0.16f else 0f
-            val score = kingP + 0.10f * homeBonus + colourBonus
+            var score = kingP + 0.10f * homeBonus + if (sameColour) 0.16f else 0f
+
+            if (previous != null) {
+                val sq = screenCellToSquare(row, col, whiteAtBottomHint)
+                val old = previous[sq]
+                score += when {
+                    old == kingChar -> 0.42f
+                    old == null -> 0.20f
+                    white && old in "RNBQP" -> -0.24f
+                    !white && old in "rnbqp" -> -0.24f
+                    else -> -0.05f
+                }
+            }
+
             if (score > bestScore) {
                 bestScore = score
                 bestSquare = i
