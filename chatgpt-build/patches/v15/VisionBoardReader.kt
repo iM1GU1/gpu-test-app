@@ -76,8 +76,8 @@ class VisionBoardReader(context: Context) : AutoCloseable {
             top[i] = best
         }
 
-        repairUniqueKing(top, raw, labels.indexOf('K'))
-        repairUniqueKing(top, raw, labels.indexOf('k'))
+        repairUniqueKing(top, raw, labels.indexOf('K'), true)
+        repairUniqueKing(top, raw, labels.indexOf('k'), false)
 
         val whiteAtBottom = inferOrientation(top)
         val pieces = linkedMapOf<String, Char>()
@@ -100,24 +100,34 @@ class VisionBoardReader(context: Context) : AutoCloseable {
         )
     }
 
-    private fun repairUniqueKing(top: IntArray, raw: Array<FloatArray>, kingIndex: Int) {
+    private fun repairUniqueKing(top: IntArray, raw: Array<FloatArray>, kingIndex: Int, white: Boolean) {
         val current = top.indices.filter { top[it] == kingIndex }
         if (current.size == 1) return
 
+        // World Chess/FIDE Arena uses outlined white pieces.  The old model often
+        // labels the white king as another white piece with high top-1 confidence.
+        // Recover a missing/duplicate king from the king probability, colour and
+        // expected home-side geometry, but keep final position validation strict.
         var bestSquare = -1
-        var bestP = 0f
+        var bestScore = Float.NEGATIVE_INFINITY
         for (i in 0 until 64) {
-            val p = raw[i][kingIndex]
-            if (p > bestP) {
-                bestP = p
+            val row = i / 8
+            val predicted = labels[top[i]]
+            val sameColour = if (white) predicted in "RNBQKP" else predicted in "rnbqkp"
+            val kingP = raw[i][kingIndex]
+            val homeBonus = if (white) row / 7f else (7 - row) / 7f
+            val colourBonus = if (sameColour) 0.16f else 0f
+            val score = kingP + 0.10f * homeBonus + colourBonus
+            if (score > bestScore) {
+                bestScore = score
                 bestSquare = i
             }
         }
-        if (bestSquare < 0 || bestP < 0.08f) return
+        if (bestSquare < 0 || raw[bestSquare][kingIndex] < 0.015f) return
 
         for (i in current) {
             if (i == bestSquare) continue
-            var alt = 0
+            var alt = if (kingIndex == 0) 1 else 0
             for (j in labels.indices) {
                 if (j != kingIndex && raw[i][j] > raw[i][alt]) alt = j
             }
