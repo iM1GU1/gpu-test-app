@@ -6,3 +6,6 @@ Exec=bash -c 'cd "$(dirname "%k")" && ./start_app.sh'
 Icon=utilities-terminal
 Terminal=true
 Categories=Utility;
+
+
+<!-- chatgpt-build-trigger: v15 -->
