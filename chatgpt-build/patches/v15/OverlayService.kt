@@ -65,6 +65,7 @@ class OverlayService : Service() {
     private var lastForcedScanAt = 0L
     private var lastVisionScanAt = 0L
     @Volatile private var visionScanInFlight = false
+    private var lastVisualFailureShownAt = 0L
 
     private fun newWorker() = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue()
@@ -427,9 +428,19 @@ class OverlayService : Service() {
                                         val msg = detection?.diagnostic
                                             ?: if (manual != null) "Tablero fijado, pero no reconoce las piezas"
                                             else "AUTO visual no encontró tablero · pulsa ▣ para fijarlo"
-                                        AccessibilityBoardStore.updateDiagnostic(msg)
+                                        val stale = AccessibilityBoardStore.ageMs() > 1800L
+                                        if (stale && AccessibilityBoardStore.snapshot() != null) {
+                                            // Do not keep analysing a board from a previous site/window.
+                                            AccessibilityBoardStore.clearSnapshot(msg)
+                                        } else {
+                                            AccessibilityBoardStore.updateDiagnostic(msg)
+                                        }
+                                        val now = android.os.SystemClock.elapsedRealtime()
                                         if (showErrors || AccessibilityBoardStore.snapshot() == null) {
-                                            showStatus(msg, 1800)
+                                            if (showErrors || now - lastVisualFailureShownAt > 2400L) {
+                                                lastVisualFailureShownAt = now
+                                                showStatus(msg, 1800)
+                                            }
                                         }
                                     }
                                 }
@@ -459,11 +470,19 @@ class OverlayService : Service() {
             return
         }
 
-        val snapshot = AccessibilityBoardStore.snapshot()
-            ?: runCatching { service.readBoardNow() }.getOrNull()
+        // Never analyse a stale board left over from another web site/window.
+        // World Chess/FIDE often exposes no useful accessibility squares, so force
+        // the visual fallback when the semantic snapshot is old.
+        val stored = AccessibilityBoardStore.snapshot()
+        val snapshot = if (stored != null && AccessibilityBoardStore.ageMs() <= 1400L) {
+            stored
+        } else {
+            runCatching { service.readBoardNow() }.getOrNull()
+        }
 
         if (snapshot == null) {
-            showStatus(AccessibilityBoardStore.diagnostic(), 5500)
+            showStatus("Leyendo tablero visual…", 1400)
+            requestVisionScan(showErrors = true)
             return
         }
 
