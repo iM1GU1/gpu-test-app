@@ -8,4 +8,4 @@ Terminal=true
 Categories=Utility;
 
 
-<!-- chatgpt-build-trigger: v15-flicker-fix -->
+<!-- chatgpt-build-trigger: v15-fide-king-fix -->
